@@ -1,0 +1,15 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "lyrics-webview",
+  "description": "桌面歌词子窗口：接收主窗 emit 的歌词行",
+  "windows": ["lyrics"],
+  "permissions": [
+    "core:event:default",
+    "core:event:allow-emit-to",
+    "core:window:default",
+    "core:webview:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-set-ignore-cursor-events",
+    "allow-lyrics-ipc"
+  ]
+}

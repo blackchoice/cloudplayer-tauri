@@ -1,0 +1,17 @@
+node_modules/
+dist/
+src-tauri/target/
+.DS_Store
+*.log
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# IDE/editor
+.vscode/
+.idea/
+
+# OS temp files
+Thumbs.db

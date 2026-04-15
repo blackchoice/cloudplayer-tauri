@@ -1,0 +1,8 @@
+[[permission]]
+identifier = "allow-lyrics-ipc"
+description = "桌面歌词子窗口：读写设置、设置鼠标穿透"
+commands.allow = [
+  "get_settings",
+  "save_settings",
+  "set_desktop_lyrics_click_through",
+]

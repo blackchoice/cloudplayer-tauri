@@ -1,0 +1,37 @@
+[package]
+name = "cloudplayer-tauri"
+version = "0.1.0"
+description = "CloudPlayer desktop (Tauri / Rust)"
+edition = "2021"
+
+[lib]
+name = "cloudplayer_tauri_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["protocol-asset"] }
+tauri-plugin-dialog = "2"
+walkdir = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+dirs = "5"
+# native-tls：Windows 走 Schannel，与系统浏览器证书/代理行为更接近，减少「浏览器能开页、Rust 请求失败」
+reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls"] }
+scraper = "0.21"
+regex = "1"
+url = "2"
+tokio = { version = "1", features = ["time", "sync", "macros", "rt-multi-thread"] }
+base64 = "0.22"
+image = "0.25"
+imageproc = "0.25"
+rand = "0.8"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true

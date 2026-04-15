@@ -1,0 +1,31 @@
+[[permission]]
+identifier = "allow-main-app"
+description = "主窗口调用 CloudPlayer 全部业务命令（与 core:default 配合）"
+commands.allow = [
+  "get_settings",
+  "save_settings",
+  "set_desktop_lyrics_click_through",
+  "db_status",
+  "search_songs",
+  "get_preview_url",
+  "cache_preview_for_play",
+  "resolve_online_play",
+  "parse_import_text",
+  "list_playlists",
+  "list_playlist_import_items",
+  "create_playlist",
+  "rename_playlist",
+  "delete_playlist",
+  "delete_playlist_import_item",
+  "replace_playlist_import_items",
+  "append_playlist_import_items",
+  "start_import_enrich",
+  "fetch_song_lrc",
+  "fetch_share_playlist",
+  "list_local_songs",
+  "scan_music_folder",
+  "list_recent_plays",
+  "record_recent_play",
+  "enqueue_download",
+  "fetch_song_lrc_enriched",
+]

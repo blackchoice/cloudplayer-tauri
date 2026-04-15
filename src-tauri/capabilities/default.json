@@ -1,0 +1,17 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "主窗口：含创建桌面歌词子窗口、向子窗口发事件",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "dialog:default",
+    "allow-main-app",
+    "core:webview:allow-create-webview-window",
+    "core:event:allow-emit-to",
+    "core:window:allow-hide",
+    "core:window:allow-show",
+    "core:window:allow-is-visible",
+    "core:window:allow-set-focus"
+  ]
+}
