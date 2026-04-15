@@ -1,11 +1,9 @@
-//! 多源歌词解析：默认顺序为 **Lrc.cx**（`api.lrc.cx/lyrics`）→ 网易云（自托管时 YRC `/lyric/new` 优先）→ LRCLIB → pjmp3 页内 LRC。
+//! 歌词解析与载荷：统一 LRC 文本 + 可选逐字时间轴；播放页自动拉词见 [`crate::lyric_replace::fetch_song_lddc_enriched`]（QQ → 酷狗 → 网易云 → LRCLIB）。
 //!
 //! 自托管 [NeteaseCloudMusicApiEnhanced](https://github.com/NeteaseCloudMusicApiEnhanced/api-enhanced)
-//! 时，在 `GET /lyric` 之前优先请求 `GET /lyric/new`，将返回的 **YRC（逐字）** 转为标准 LRC 供前端解析。
+//! 时，在 `GET /lyric` 之前优先请求 `GET /lyric/new`：有 **YRC** 则逐字；否则若同包内已有行级 **lrc** 则直接使用，仅当仍无可用文本时再请求 `GET /lyric`。
 //!
-//! 歌词文本经 [amll_lyric]（[Apple Music-like Lyrics](https://github.com/Steve-xmh/applemusic-like-lyrics) 子库）解析/序列化为统一 LRC；YRC / TTML 亦转为 LRC。
-//!
-//! **atlas** 源：内置请求 [amll-ttml-db](https://amlldb.bikonoo.com)（`GET …/ncm-lyrics/{网易云ID}.ttml|yrc|lrc`），与 Lyric-Atlas 仓库逻辑一致，无需自托管服务。
+//! 在线试听等仍可用 [amll_lyric] 做 LRC/TTML 归一化；**QQ 音乐 QRC 解密后**在 [`crate::lddc_parse`] 中按 [LDDC](https://github.com/chenmozhijin/LDDC) 规则解析逐词，不经 amll YRC。
 
 use std::io::Cursor;
 
@@ -18,15 +16,14 @@ use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, CONTENT_TYPE, REFERER, USE
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::config::Settings;
+use crate::lrc_embedded::try_parse_embedded_word_lrc;
 use crate::lrc_format::has_lrc_timestamp_tags;
-use crate::pjmp3::fetch_song_lrc_text;
 
 fn lyrics_log(msg: impl AsRef<str>) {
     eprintln!("[lyrics] {}", msg.as_ref());
 }
 
-fn netease_portal_headers() -> HeaderMap {
+pub(crate) fn netease_portal_headers() -> HeaderMap {
     let mut h = HeaderMap::new();
     h.insert(
         USER_AGENT,
@@ -42,10 +39,12 @@ fn netease_portal_headers() -> HeaderMap {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LyricsFetchIn {
+    /// 前端仍会带上；自动拉词已改走 LDDC 多源，不再使用曲库 id 拉词。
+    #[allow(dead_code)]
     pub pjmp3_source_id: Option<String>,
     pub title: String,
     pub artist: String,
-    /// 可选，传给 [Lrc.cx](https://api.lrc.cx) 等源以提高匹配率
+    #[allow(dead_code)]
     #[serde(default)]
     pub album: String,
     #[serde(default)]
@@ -81,7 +80,7 @@ pub struct WordTiming {
 }
 
 /// 从 amll 解析结果生成载荷；仅当至少一行含多个词时视为「逐字」可用（行级 LRC 为每行一词，不启用）。
-fn lyric_lines_to_payload(lines: &[LyricLine<'_>]) -> LyricsPayload {
+pub(crate) fn lyric_lines_to_payload(lines: &[LyricLine<'_>]) -> LyricsPayload {
     let lrc_text = pack_lyrics_for_ui(stringify_lrc(lines));
     let has_word_timing = lines.iter().any(|l| l.words.len() > 1);
     let word_lines = if has_word_timing {
@@ -112,46 +111,14 @@ fn lyric_lines_to_payload(lines: &[LyricLine<'_>]) -> LyricsPayload {
     }
 }
 
-fn line_only_payload(raw: String) -> LyricsPayload {
+pub(crate) fn line_only_payload(raw: String) -> LyricsPayload {
+    if let Some(p) = try_parse_embedded_word_lrc(&raw) {
+        return p;
+    }
     LyricsPayload {
         lrc_text: pack_lyrics_for_ui(raw),
         word_lines: None,
     }
-}
-
-#[inline]
-fn is_word_level(p: &LyricsPayload) -> bool {
-    p.word_lines.is_some()
-}
-
-enum Prov {
-    LrcCx,
-    Atlas,
-    Pjmp3,
-    Netease,
-    Lrclib,
-}
-
-fn parse_order(s: &str) -> Vec<Prov> {
-    let mut out = Vec::new();
-    for p in s.split(',') {
-        match p.trim().to_ascii_lowercase().as_str() {
-            "lrccx" | "lrc_cx" => out.push(Prov::LrcCx),
-            "atlas" | "lyric_atlas" => out.push(Prov::Atlas),
-            "pjmp3" => out.push(Prov::Pjmp3),
-            "netease" => out.push(Prov::Netease),
-            "lrclib" => out.push(Prov::Lrclib),
-            _ => {}
-        }
-    }
-    if out.is_empty() {
-        out.push(Prov::Netease);
-        out.push(Prov::Atlas);
-        out.push(Prov::LrcCx);
-        out.push(Prov::Lrclib);
-        out.push(Prov::Pjmp3);
-    }
-    out
 }
 
 #[inline]
@@ -160,6 +127,9 @@ fn looks_like_lrc(text: &str) -> bool {
 }
 
 fn polish_lyrics_with_amll(input: &str) -> String {
+    if let Some(p) = try_parse_embedded_word_lrc(input) {
+        return p.lrc_text;
+    }
     let lines = parse_lrc(input);
     if !lines.is_empty() {
         let s = stringify_lrc(&lines);
@@ -204,68 +174,7 @@ pub fn pack_lyrics_for_ui(raw: String) -> String {
     }
 }
 
-const LRC_CX_LYRICS: &str = "https://api.lrc.cx/lyrics";
 const LRC_CX_COVER: &str = "https://api.lrc.cx/cover";
-
-/// Lrc.cx 歌词：`GET https://api.lrc.cx/lyrics`（`title` / `artist` / `album` 可选，空则省略）。
-async fn lyric_lrc_cx(
-    client: &Client,
-    title: &str,
-    artist: &str,
-    album: &str,
-) -> Result<Option<LyricsPayload>, String> {
-    let title = title.trim();
-    let artist = artist.trim();
-    let album = album.trim();
-    let mut q: Vec<(&str, &str)> = Vec::new();
-    if !title.is_empty() {
-        q.push(("title", title));
-    }
-    if !artist.is_empty() {
-        q.push(("artist", artist));
-    }
-    if !album.is_empty() {
-        q.push(("album", album));
-    }
-    if q.is_empty() {
-        lyrics_log("lrc.cx lyrics: skip (no title/artist/album)");
-        return Ok(None);
-    }
-    lyrics_log(format!(
-        "lrc.cx GET lyrics title={title:?} artist={artist:?} album={album:?}"
-    ));
-    let r = client
-        .get(LRC_CX_LYRICS)
-        .query(&q)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-    if !r.status().is_success() {
-        lyrics_log(format!("lrc.cx lyrics http {}", r.status()));
-        return Ok(None);
-    }
-    let text = r.text().await.map_err(|e| e.to_string())?;
-    let text = text.trim();
-    if text.is_empty() {
-        lyrics_log("lrc.cx lyrics: empty body");
-        return Ok(None);
-    }
-    if text.eq_ignore_ascii_case("invalid http request") {
-        lyrics_log("lrc.cx lyrics: invalid http request");
-        return Ok(None);
-    }
-    if looks_like_lrc(text) {
-        lyrics_log(format!("lrc.cx lyrics ok chars={}", text.len()));
-        return Ok(Some(line_only_payload(text.to_string())));
-    }
-    let polished = polish_lyrics_with_amll(text);
-    if looks_like_lrc(&polished) {
-        lyrics_log(format!("lrc.cx lyrics ok (amll) chars={}", polished.len()));
-        return Ok(Some(line_only_payload(polished)));
-    }
-    lyrics_log("lrc.cx lyrics: body not lrc-like");
-    Ok(None)
-}
 
 /// Lrc.cx 封面：`GET https://api.lrc.cx/cover`（跟随重定向至 CDN 图片 URL）。
 pub async fn fetch_lrc_cx_cover(
@@ -337,8 +246,25 @@ pub async fn fetch_lrc_cx_cover(
     Ok(None)
 }
 
-/// 从 `/lyric/new` 的 JSON 中取 YRC 原文（兼容 api-enhanced / Binaryify 多种嵌套）。
-fn yrc_raw_from_lyric_new_json(v: &Value) -> Option<String> {
+/// 首行是否为 YRC / 部分 klyric 使用的 `[毫秒,毫秒]` 行头（区别于 `[mm:ss.xx]` LRC）。
+fn first_line_looks_like_yrc_bracket(s: &str) -> bool {
+    let first = s.trim().lines().next().unwrap_or("").trim_start();
+    if !first.starts_with('[') {
+        return false;
+    }
+    let Some(end) = first.find(']') else {
+        return false;
+    };
+    let inside = &first[1..end];
+    // 行级 LRC 时间戳含 `:`；YRC 行时间为纯数字与逗号
+    if inside.contains(':') {
+        return false;
+    }
+    inside.contains(',')
+}
+
+/// 从对象或裸字符串中取 `lyric` 字段或整段文本（YRC / 兼容 klyric 容器）。
+fn try_value_yrc_like(node: &Value) -> Option<String> {
     let try_str = |s: &str| {
         let t = s.trim();
         if t.is_empty() {
@@ -347,21 +273,42 @@ fn yrc_raw_from_lyric_new_json(v: &Value) -> Option<String> {
             Some(t.to_string())
         }
     };
-    let try_value_yrc = |node: &Value| -> Option<String> {
-        if let Some(s) = node.as_str() {
-            return try_str(s);
+    if let Some(s) = node.as_str() {
+        return try_str(s);
+    }
+    if let Some(s) = node.get("lyric").and_then(|x| x.as_str()) {
+        return try_str(s);
+    }
+    None
+}
+
+/// 在一层 JSON 上尝试所有已知路径（`yrc` / `Yrc` / `result` 等）。
+fn try_yrc_raw_from_lyric_new_layer(v: &Value) -> Option<String> {
+    let try_str = |s: &str| {
+        let t = s.trim();
+        if t.is_empty() {
+            None
+        } else {
+            Some(t.to_string())
         }
-        if let Some(s) = node.get("lyric").and_then(|x| x.as_str()) {
-            return try_str(s);
-        }
-        None
     };
+    let try_value_yrc = |node: &Value| try_value_yrc_like(node);
+
+    // 常见：字符串在固定路径上
     for ptr in [
         "/yrc/lyric",
+        "/Yrc/lyric",
         "/body/yrc/lyric",
+        "/body/Yrc/lyric",
         "/data/yrc/lyric",
+        "/data/Yrc/lyric",
         "/result/yrc/lyric",
+        "/result/Yrc/lyric",
+        "/result/data/yrc/lyric",
+        "/data/result/yrc/lyric",
         "/body/data/yrc/lyric",
+        "/body/result/yrc/lyric",
+        "/data/data/yrc/lyric",
     ] {
         if let Some(s) = v.pointer(ptr).and_then(|x| x.as_str()) {
             if let Some(t) = try_str(s) {
@@ -369,26 +316,169 @@ fn yrc_raw_from_lyric_new_json(v: &Value) -> Option<String> {
             }
         }
     }
-    if let Some(n) = v.get("yrc") {
-        if let Some(t) = try_value_yrc(n) {
-            return Some(t);
+    // 对象：根或嵌套下的 `yrc` / `Yrc`
+    for key in ["yrc", "Yrc"] {
+        if let Some(n) = v.get(key) {
+            if let Some(t) = try_value_yrc(n) {
+                return Some(t);
+            }
         }
     }
-    if let Some(n) = v.pointer("/body/yrc") {
-        if let Some(t) = try_value_yrc(n) {
-            return Some(t);
+    for ptr in [
+        "/body/yrc",
+        "/body/Yrc",
+        "/data/yrc",
+        "/data/Yrc",
+        "/result/yrc",
+        "/result/Yrc",
+        "/body/data/yrc",
+        "/body/data/Yrc",
+        "/data/body/yrc",
+        "/data/body/Yrc",
+    ] {
+        if let Some(n) = v.pointer(ptr) {
+            if let Some(t) = try_value_yrc(n) {
+                return Some(t);
+            }
         }
     }
-    if let Some(n) = v.pointer("/data/yrc") {
-        if let Some(t) = try_value_yrc(n) {
-            return Some(t);
+    // 部分上游把逐字放在 klyric，且内容为 YRC 括号格式（与行级 LRC 区分）
+    for ptr in [
+        "/klyric/lyric",
+        "/body/klyric/lyric",
+        "/data/klyric/lyric",
+        "/result/klyric/lyric",
+    ] {
+        if let Some(s) = v.pointer(ptr).and_then(|x| x.as_str()) {
+            if first_line_looks_like_yrc_bracket(s) {
+                if let Some(t) = try_str(s) {
+                    return Some(t);
+                }
+            }
+        }
+    }
+    for ptr in ["/klyric", "/body/klyric", "/data/klyric", "/result/klyric"] {
+        if let Some(n) = v.pointer(ptr) {
+            if let Some(s) = try_value_yrc(n) {
+                if first_line_looks_like_yrc_bracket(&s) {
+                    return Some(s);
+                }
+            }
         }
     }
     None
 }
 
-/// `GET {api_base}/lyric/new?id=`（api-enhanced），YRC → LRC + 可选逐字时间轴。
-async fn lyric_netease_api_yrc(
+/// 若 `body` / `data` / `result` / `payload` 为 JSON 字符串，解包后再解析一层（代理或网关常见）。
+fn try_unwrap_json_string_child(v: &Value) -> Option<Value> {
+    for key in ["body", "data", "result", "payload"] {
+        if let Some(Value::String(s)) = v.get(key) {
+            let t = s.trim();
+            if t.starts_with('{') || t.starts_with('[') {
+                if let Ok(inner) = serde_json::from_str::<Value>(t) {
+                    return Some(inner);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// 从 `/lyric/new` 的 JSON 中取 YRC 原文（兼容 api-enhanced / Binaryify / 网关包装、大小写、部分 klyric）。
+fn yrc_raw_from_lyric_new_json(v: &Value) -> Option<String> {
+    fn depth(v: &Value, d: u8) -> Option<String> {
+        if d > 4 {
+            return None;
+        }
+        if let Some(t) = try_yrc_raw_from_lyric_new_layer(v) {
+            return Some(t);
+        }
+        if let Some(inner) = try_unwrap_json_string_child(v) {
+            if let Some(t) = depth(&inner, d + 1) {
+                return Some(t);
+            }
+        }
+        // `data` 为对象且内含 `body` 等 JSON 字符串时再剥一层
+        if let Some(data_val) = v.get("data") {
+            if let Some(inner) = try_unwrap_json_string_child(data_val) {
+                if let Some(t) = depth(&inner, d + 1) {
+                    return Some(t);
+                }
+            }
+        }
+        None
+    }
+    depth(v, 0)
+}
+
+/// 解析失败时打出简要诊断，便于对照自托管接口返回（官方常见 `nolyric` / `uncollected` / 空 `yrc.lyric`）。
+fn log_lyric_new_yrc_miss(v: &Value) {
+    let code = v.get("code").and_then(|x| x.as_i64());
+    let nolyric = v.get("nolyric").and_then(|x| x.as_bool());
+    let uncollected = v.get("uncollected").and_then(|x| x.as_bool());
+    let yrc_status = match v.get("yrc") {
+        None => "absent",
+        Some(Value::Null) => "null",
+        Some(Value::String(s)) if s.trim().is_empty() => "empty_str",
+        Some(Value::String(_)) => "str_not_matched_by_parser",
+        Some(obj) => {
+            let has_lyric = obj.get("lyric").is_some();
+            let lyric_empty = obj
+                .get("lyric")
+                .and_then(|x| x.as_str())
+                .map(|s| s.trim().is_empty())
+                .unwrap_or(true);
+            match (has_lyric, lyric_empty) {
+                (false, _) => "object_no_lyric_field",
+                (true, true) => "object_lyric_empty",
+                (true, false) => "object_lyric_nonempty_but_paths_failed",
+            }
+        }
+    };
+    lyrics_log(format!(
+        "netease api lyric/new: no yrc text (code={code:?} nolyric={nolyric:?} uncollected={uncollected:?} top_yrc={yrc_status})"
+    ));
+    // REMOVE: temporary upstream dump for `/lyric/new` shape — delete this whole block once done.
+    #[cfg(debug_assertions)]
+    {
+        const MAX: usize = 12_000;
+        match serde_json::to_string(v) {
+            Ok(s) if s.len() <= MAX => {
+                lyrics_log(format!("netease api lyric/new: raw json (debug) {s}"));
+            }
+            Ok(s) => {
+                let mut end = MAX.min(s.len());
+                while end > 0 && !s.is_char_boundary(end) {
+                    end -= 1;
+                }
+                lyrics_log(format!(
+                    "netease api lyric/new: raw json (debug, truncated to {} of {} bytes) {}…",
+                    end,
+                    s.len(),
+                    &s[..end]
+                ));
+            }
+            Err(e) => lyrics_log(format!("netease api lyric/new: raw json (debug) serialize err {e}")),
+        }
+    }
+}
+
+/// 网易 `GET /lyric` 与 `GET /lyric/new` 响应里常见的行级 LRC 文本。
+fn lrc_line_from_netease_lyric_value(v: &Value) -> Option<String> {
+    let s = v
+        .pointer("/lrc/lyric")
+        .and_then(|x| x.as_str())
+        .or_else(|| v.get("lrc").and_then(|x| x.as_str()))?;
+    let t = s.trim();
+    if t.is_empty() {
+        None
+    } else {
+        Some(t.to_string())
+    }
+}
+
+/// `GET {api_base}/lyric/new?id=`：优先 YRC 逐字；否则若同一份 JSON 里已有行级 `lrc`，直接使用（避免再请求 `GET /lyric`）。
+async fn lyric_netease_api_lyric_new(
     client: &Client,
     api_base: &str,
     song_id: i64,
@@ -406,476 +496,113 @@ async fn lyric_netease_api_yrc(
         return Ok(None);
     }
     let v: Value = r.json::<Value>().await.map_err(|e| e.to_string())?;
-    let Some(raw) = yrc_raw_from_lyric_new_json(&v) else {
-        lyrics_log("netease api lyric/new: no yrc text in json");
-        return Ok(None);
-    };
-    let lines = parse_yrc(&raw);
-    if lines.is_empty() {
-        lyrics_log("netease api yrc: amll parse_yrc empty");
-        return Ok(None);
-    }
-    let payload = lyric_lines_to_payload(&lines);
-    if looks_like_lrc(&payload.lrc_text) {
-        lyrics_log(format!(
-            "netease api yrc->lrc ok chars={} (from yrc chars={}) word_level={}",
-            payload.lrc_text.len(),
-            raw.len(),
-            payload.word_lines.is_some()
-        ));
-        Ok(Some(payload))
-    } else {
-        lyrics_log("netease api yrc->lrc: not lrc-like");
-        Ok(None)
-    }
-}
 
-async fn lyric_lrclib(
-    client: &Client,
-    title: &str,
-    artist: &str,
-    duration_seconds: Option<f64>,
-) -> Result<Option<LyricsPayload>, String> {
-    lyrics_log(format!(
-        "lrclib request title={title:?} artist={artist:?} duration_s={duration_seconds:?}"
-    ));
-    let mut req = client
-        .get("https://lrclib.net/api/get")
-        .query(&[("track_name", title), ("artist_name", artist)]);
-    if let Some(d) = duration_seconds {
-        if d.is_finite() && d > 0.0 {
-            req = req.query(&[("duration", &d.round().max(1.0).to_string())]);
-        }
-    }
-    let r = req.send().await.map_err(|e| e.to_string())?;
-    if !r.status().is_success() {
-        lyrics_log(format!("lrclib http {}", r.status()));
-        return Ok(None);
-    }
-    let v: Value = r.json::<Value>().await.map_err(|e| e.to_string())?;
-    if let Some(s) = v.get("syncedLyrics").and_then(|x| x.as_str()) {
-        if looks_like_lrc(s) {
-            lyrics_log(format!("lrclib hit syncedLyrics chars={}", s.len()));
-            return Ok(Some(line_only_payload(s.to_string())));
-        }
-    }
-    if let Some(s) = v.get("plainLyrics").and_then(|x| x.as_str()) {
-        if looks_like_lrc(s) {
-            lyrics_log(format!("lrclib hit plainLyrics chars={}", s.len()));
-            return Ok(Some(line_only_payload(s.to_string())));
-        }
-    }
-    lyrics_log("lrclib: no usable lrc field");
-    Ok(None)
-}
-
-/// 门户搜索首条歌曲 id（与 [`lyric_netease_music163_portal`] 搜索阶段一致）。
-async fn netease_portal_search_song_id(
-    client: &Client,
-    title: &str,
-    artist: &str,
-) -> Result<Option<i64>, String> {
-    let kw = format!("{artist} {title}");
-    let search = client
-        .get("https://music.163.com/api/search/get/web")
-        .headers(netease_portal_headers())
-        .query(&[("s", kw.as_str()), ("type", "1"), ("limit", "8")])
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-    if !search.status().is_success() {
-        lyrics_log(format!(
-            "netease portal search (id-only) http {}",
-            search.status()
-        ));
-        return Ok(None);
-    }
-    let sj: Value = search.json::<Value>().await.map_err(|e| e.to_string())?;
-    if sj.get("code").and_then(|x| x.as_i64()).unwrap_or(0) != 200 {
-        return Ok(None);
-    }
-    Ok(sj
-        .pointer("/result/songs/0/id")
-        .and_then(|x| x.as_i64())
-        .or_else(|| sj.pointer("/result/songs/0/song/id").and_then(|x| x.as_i64())))
-}
-
-/// 与 Lyric-Atlas `RepositoryFetcher` 等价：门户搜网易云 ID 后按 ttml → yrc → lrc 拉取并解析为 LRC。
-const TTML_DB_BASE: &str = "https://amlldb.bikonoo.com/ncm-lyrics/";
-
-async fn lyric_ttml_db(
-    client: &Client,
-    title: &str,
-    artist: &str,
-) -> Result<Option<LyricsPayload>, String> {
-    let Some(nid) = netease_portal_search_song_id(client, title, artist).await? else {
-        lyrics_log("atlas(ttml-db): no netease song id");
-        return Ok(None);
-    };
-    lyrics_log(format!("atlas(ttml-db): song id={nid}"));
-    for ext in ["ttml", "yrc", "lrc"] {
-        let url = format!("{TTML_DB_BASE}{nid}.{ext}");
-        lyrics_log(format!("atlas(ttml-db): GET {url}"));
-        let r = client.get(&url).send().await.map_err(|e| e.to_string())?;
-        let status = r.status();
-        if status.as_u16() == 404 {
-            continue;
-        }
-        if !status.is_success() {
-            lyrics_log(format!("atlas(ttml-db): {ext} http {}", status));
-            continue;
-        }
-        let body = r.text().await.map_err(|e| e.to_string())?;
-        let content = body.trim();
-        if content.is_empty() {
-            continue;
-        }
-        let maybe_payload = match ext {
-            "ttml" => match parse_ttml(Cursor::new(body.as_bytes())) {
-                Ok(lyric) if !lyric.lines.is_empty() => Some(lyric_lines_to_payload(&lyric.lines)),
-                Ok(_) => None,
-                Err(e) => {
-                    lyrics_log(format!("atlas(ttml-db): parse_ttml err {e}"));
-                    None
-                }
-            },
-            "yrc" => {
-                let lines = parse_yrc(content);
-                if lines.is_empty() {
-                    None
-                } else {
-                    Some(lyric_lines_to_payload(&lines))
-                }
-            }
-            "lrc" => {
-                let lines = parse_lrc(content);
-                if lines.is_empty() {
-                    None
-                } else {
-                    Some(lyric_lines_to_payload(&lines))
-                }
-            }
-            _ => unreachable!(),
-        };
-        if let Some(p) = maybe_payload {
-            if !p.lrc_text.trim().is_empty() {
+    let yrc_raw = yrc_raw_from_lyric_new_json(&v);
+    if let Some(ref raw) = yrc_raw {
+        let lines = parse_yrc(raw);
+        if !lines.is_empty() {
+            let payload = lyric_lines_to_payload(&lines);
+            if looks_like_lrc(&payload.lrc_text) {
                 lyrics_log(format!(
-                    "atlas(ttml-db): ok from {ext} chars={} word_level={}",
-                    p.lrc_text.len(),
-                    p.word_lines.is_some()
+                    "netease api yrc->lrc ok chars={} (from yrc chars={}) word_level={}",
+                    payload.lrc_text.len(),
+                    raw.len(),
+                    payload.word_lines.is_some()
                 ));
-                return Ok(Some(p));
+                return Ok(Some(payload));
             }
         }
+        lyrics_log("netease api yrc: amll parse_yrc empty or not lrc-like, try line lrc in lyric/new");
+    }
+
+    if let Some(ly) = lrc_line_from_netease_lyric_value(&v) {
+        if looks_like_lrc(&ly) {
+            lyrics_log(format!(
+                "netease api lyric/new: line lrc chars={} word_level=false (no usable yrc)",
+                ly.len()
+            ));
+            return Ok(Some(line_only_payload(ly)));
+        }
+    }
+
+    if yrc_raw.is_none() {
+        log_lyric_new_yrc_miss(&v);
     }
     Ok(None)
 }
 
-/// 直连 music.163.com 网页 API（不依赖自托管 NeteaseCloudMusicApi）。
-async fn lyric_netease_music163_portal(
+/// 歌词替换：已知网易云歌曲 id（自托管 API 优先，否则门户单行 LRC）。
+pub async fn fetch_netease_lyrics_by_song_id(
     client: &Client,
-    title: &str,
-    artist: &str,
+    api_base: Option<&str>,
+    song_id: i64,
 ) -> Result<Option<LyricsPayload>, String> {
-    let kw = format!("{artist} {title}");
-    let search = client
-        .get("https://music.163.com/api/search/get/web")
-        .headers(netease_portal_headers())
-        .query(&[("s", kw.as_str()), ("type", "1"), ("limit", "8")])
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-    if !search.status().is_success() {
-        lyrics_log(format!("netease portal search http {}", search.status()));
-        return Ok(None);
+    if let Some(base) = api_base {
+        let b = base.trim().trim_end_matches('/');
+        if !b.is_empty() {
+            match lyric_netease_api_lyric_new(client, b, song_id).await {
+                Ok(Some(p)) => return Ok(Some(p)),
+                Ok(None) => {}
+                Err(e) => lyrics_log(format!("replace netease lyric/new: {e}")),
+            }
+            let lr = client
+                .get(format!("{b}/lyric"))
+                .query(&[("id", song_id.to_string())])
+                .send()
+                .await
+                .map_err(|e| e.to_string())?;
+            if lr.status().is_success() {
+                let lj: Value = lr.json().await.map_err(|e| e.to_string())?;
+                if let Some(ly) = lrc_line_from_netease_lyric_value(&lj) {
+                    if looks_like_lrc(&ly) {
+                        return Ok(Some(line_only_payload(ly)));
+                    }
+                }
+            }
+        }
     }
-    let sj: Value = search.json::<Value>().await.map_err(|e| e.to_string())?;
-    if sj.get("code").and_then(|x| x.as_i64()).unwrap_or(0) != 200 {
-        lyrics_log("netease portal search: code != 200");
-        return Ok(None);
-    }
-    let id = sj
-        .pointer("/result/songs/0/id")
-        .and_then(|x| x.as_i64())
-        .or_else(|| sj.pointer("/result/songs/0/song/id").and_then(|x| x.as_i64()));
-    let Some(nid) = id else {
-        lyrics_log("netease portal: no song id in search result");
-        return Ok(None);
-    };
-    lyrics_log(format!("netease portal song id={nid}"));
+    let id_s = song_id.to_string();
     let lr = client
         .get("https://music.163.com/api/song/lyric")
         .headers(netease_portal_headers())
         .query(&[
-            ("id", nid.to_string()),
-            ("lv", "-1".to_string()),
-            ("kv", "-1".to_string()),
-            ("tv", "-1".to_string()),
+            ("id", id_s.as_str()),
+            ("lv", "-1"),
+            ("kv", "-1"),
+            ("tv", "-1"),
         ])
         .send()
         .await
         .map_err(|e| e.to_string())?;
     if !lr.status().is_success() {
-        lyrics_log(format!("netease portal lyric http {}", lr.status()));
         return Ok(None);
     }
-    let lj: Value = lr.json::<Value>().await.map_err(|e| e.to_string())?;
-    if let Some(ly) = lj.pointer("/lrc/lyric").and_then(|x| x.as_str()) {
-        if looks_like_lrc(ly) {
-            lyrics_log(format!("netease portal hit /lrc/lyric chars={}", ly.len()));
-            return Ok(Some(line_only_payload(ly.to_string())));
+    let lj: Value = lr.json().await.map_err(|e| e.to_string())?;
+    if let Some(ly) = lrc_line_from_netease_lyric_value(&lj) {
+        if looks_like_lrc(&ly) {
+            return Ok(Some(line_only_payload(ly)));
         }
     }
-    if let Some(ly) = lj.get("lrc").and_then(|x| x.as_str()) {
-        if looks_like_lrc(ly) {
-            lyrics_log(format!("netease portal hit lrc str chars={}", ly.len()));
-            return Ok(Some(line_only_payload(ly.to_string())));
-        }
-    }
-    lyrics_log("netease portal: lyric payload not lrc-like");
     Ok(None)
 }
 
-async fn lyric_netease(
-    client: &Client,
-    api_base: &str,
-    title: &str,
-    artist: &str,
-) -> Result<Option<LyricsPayload>, String> {
-    let base = api_base.trim().trim_end_matches('/');
-    if base.is_empty() {
+/// LRCLIB：按内部 id 获取歌词。
+pub async fn fetch_lrclib_by_id(client: &Client, lrclib_id: i64) -> Result<Option<LyricsPayload>, String> {
+    let url = format!("https://lrclib.net/api/get/{lrclib_id}");
+    let r = client.get(&url).send().await.map_err(|e| e.to_string())?;
+    if !r.status().is_success() {
         return Ok(None);
     }
-    lyrics_log(format!("netease api search base={base} title={title:?} artist={artist:?}"));
-    let kw = format!("{artist} {title}");
-    let search = client
-        .get(format!("{base}/cloudsearch"))
-        .query(&[("keywords", kw.as_str()), ("type", "1"), ("limit", "5")])
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-    if !search.status().is_success() {
-        lyrics_log(format!("netease api cloudsearch http {}", search.status()));
-        return Ok(None);
-    }
-    let sj: Value = search.json::<Value>().await.map_err(|e| e.to_string())?;
-    let id = sj
-        .pointer("/result/songs/0/id")
-        .and_then(|x| x.as_i64())
-        .or_else(|| sj.pointer("/songs/0/id").and_then(|x| x.as_i64()));
-    let Some(nid) = id else {
-        lyrics_log("netease api: no song id");
-        return Ok(None);
-    };
-    lyrics_log(format!("netease api song id={nid}"));
-    // api-enhanced：`/lyric/new` → 逐字 YRC，转成 LRC + 可选 word_lines
-    match lyric_netease_api_yrc(client, base, nid).await {
-        Ok(Some(payload)) => return Ok(Some(payload)),
-        Ok(None) => {}
-        Err(e) => lyrics_log(format!("netease api lyric/new: {e}, fallback /lyric")),
-    }
-    let lr = client
-        .get(format!("{base}/lyric"))
-        .query(&[("id", nid.to_string())])
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-    if !lr.status().is_success() {
-        lyrics_log(format!("netease api lyric http {}", lr.status()));
-        return Ok(None);
-    }
-    let lj: Value = lr.json::<Value>().await.map_err(|e| e.to_string())?;
-    if let Some(ly) = lj.pointer("/lrc/lyric").and_then(|x| x.as_str()) {
-        if looks_like_lrc(ly) {
-            lyrics_log(format!("netease api hit /lrc/lyric chars={}", ly.len()));
-            return Ok(Some(line_only_payload(ly.to_string())));
+    let v: Value = r.json().await.map_err(|e| e.to_string())?;
+    if let Some(s) = v.get("syncedLyrics").and_then(|x| x.as_str()) {
+        if looks_like_lrc(s) {
+            return Ok(Some(line_only_payload(s.to_string())));
         }
     }
-    if let Some(ly) = lj.get("lrc").and_then(|x| x.as_str()) {
-        if looks_like_lrc(ly) {
-            lyrics_log(format!("netease api hit lrc str chars={}", ly.len()));
-            return Ok(Some(line_only_payload(ly.to_string())));
+    if let Some(s) = v.get("plainLyrics").and_then(|x| x.as_str()) {
+        if looks_like_lrc(s) {
+            return Ok(Some(line_only_payload(s.to_string())));
         }
     }
-    lyrics_log("netease api: lyric not lrc-like");
-    Ok(None)
-}
-
-fn consider_payload(
-    fallback: &mut Option<LyricsPayload>,
-    payload: LyricsPayload,
-    provider: &str,
-) -> Option<LyricsPayload> {
-    if is_word_level(&payload) {
-        lyrics_log(format!(
-            "result ok provider={provider} chars={} word_level=true",
-            payload.lrc_text.len()
-        ));
-        return Some(payload);
-    }
-    if fallback.is_none() {
-        lyrics_log(format!(
-            "result hold fallback provider={provider} chars={} word_level=false",
-            payload.lrc_text.len()
-        ));
-        *fallback = Some(payload);
-    }
-    None
-}
-
-pub async fn fetch_song_lrc_enriched(
-    client: &Client,
-    settings: &Settings,
-    req: &LyricsFetchIn,
-) -> Result<Option<LyricsPayload>, String> {
-    let order = parse_order(&settings.lyrics_provider_order);
-    lyrics_log(format!(
-        "fetch_song_lrc_enriched start title={:?} artist={:?} album={:?} pjmp3_source_id={:?} local_path={:?} duration_s={:?} order={}",
-        req.title,
-        req.artist,
-        req.album.as_str(),
-        req.pjmp3_source_id.as_deref(),
-        req.local_path.as_deref(),
-        req.duration_seconds,
-        settings.lyrics_provider_order
-    ));
-    let mut fallback: Option<LyricsPayload> = None;
-    for p in order {
-        match p {
-            Prov::LrcCx => {
-                lyrics_log("try provider=lrc.cx");
-                match lyric_lrc_cx(client, &req.title, &req.artist, &req.album).await {
-                    Ok(Some(payload)) => {
-                        if let Some(done) =
-                            consider_payload(&mut fallback, payload, "lrc.cx")
-                        {
-                            return Ok(Some(done));
-                        }
-                    }
-                    Ok(None) => lyrics_log("lrc.cx: miss"),
-                    Err(e) => lyrics_log(format!("lrc.cx error: {e}")),
-                }
-            }
-            Prov::Atlas => {
-                lyrics_log("try provider=atlas (amlldb)");
-                match lyric_ttml_db(client, &req.title, &req.artist).await {
-                    Ok(Some(payload)) => {
-                        if let Some(done) =
-                            consider_payload(&mut fallback, payload, "atlas")
-                        {
-                            return Ok(Some(done));
-                        }
-                    }
-                    Ok(None) => lyrics_log("atlas: miss"),
-                    Err(e) => lyrics_log(format!("atlas error: {e}")),
-                }
-            }
-            Prov::Pjmp3 => {
-                lyrics_log("try provider=pjmp3");
-                if let Some(ref sid) = req.pjmp3_source_id {
-                    let t = sid.trim();
-                    if !t.is_empty() {
-                        match fetch_song_lrc_text(client, t).await {
-                            Ok(Some(txt)) if looks_like_lrc(&txt) => {
-                                let payload = line_only_payload(txt);
-                                lyrics_log(format!(
-                                    "result ok provider=pjmp3 chars={} (after looks_like_lrc)",
-                                    payload.lrc_text.len()
-                                ));
-                                if let Some(done) =
-                                    consider_payload(&mut fallback, payload, "pjmp3")
-                                {
-                                    return Ok(Some(done));
-                                }
-                            }
-                            Ok(Some(_)) => {
-                                lyrics_log("pjmp3 returned text but not lrc-like, continue");
-                            }
-                            Ok(None) => {
-                                lyrics_log("pjmp3: no lrc");
-                            }
-                            Err(e) => {
-                                lyrics_log(format!("pjmp3 error: {e}"));
-                                return Err(e);
-                            }
-                        }
-                    } else {
-                        lyrics_log("pjmp3: empty source id");
-                    }
-                } else {
-                    lyrics_log("pjmp3: skip (no pjmp3_source_id)");
-                }
-            }
-            Prov::Netease => {
-                lyrics_log("try provider=netease");
-                let mut net: Option<LyricsPayload> = None;
-                if !settings.lyrics_netease_api_base.trim().is_empty() {
-                    match lyric_netease(
-                        client,
-                        settings.lyrics_netease_api_base.trim(),
-                        &req.title,
-                        &req.artist,
-                    )
-                    .await
-                    {
-                        Ok(t) => net = t,
-                        Err(e) => lyrics_log(format!("netease api (self-hosted) error: {e}")),
-                    }
-                } else {
-                    lyrics_log("netease: no custom api base, use portal only");
-                }
-                if net.is_none() {
-                    match lyric_netease_music163_portal(client, &req.title, &req.artist).await {
-                        Ok(t) => net = t,
-                        Err(e) => lyrics_log(format!("netease portal error: {e}")),
-                    }
-                }
-                if let Some(payload) = net {
-                    lyrics_log(format!(
-                        "result ok provider=netease chars={}",
-                        payload.lrc_text.len()
-                    ));
-                    if let Some(done) = consider_payload(&mut fallback, payload, "netease") {
-                        return Ok(Some(done));
-                    }
-                } else {
-                    lyrics_log("netease: miss");
-                }
-            }
-            Prov::Lrclib => {
-                if settings.lyrics_lrclib_enabled {
-                    lyrics_log("try provider=lrclib");
-                    match lyric_lrclib(
-                        client,
-                        &req.title,
-                        &req.artist,
-                        req.duration_seconds,
-                    )
-                    .await
-                    {
-                        Ok(Some(payload)) => {
-                            if let Some(done) =
-                                consider_payload(&mut fallback, payload, "lrclib")
-                            {
-                                return Ok(Some(done));
-                            }
-                        }
-                        Ok(None) => lyrics_log("lrclib: miss"),
-                        Err(e) => lyrics_log(format!("lrclib error: {e}")),
-                    }
-                } else {
-                    lyrics_log("lrclib: disabled in settings");
-                }
-            }
-        }
-    }
-    if let Some(f) = fallback.take() {
-        lyrics_log(format!(
-            "fetch_song_lrc_enriched: return line-only fallback chars={}",
-            f.lrc_text.len()
-        ));
-        return Ok(Some(f));
-    }
-    lyrics_log("fetch_song_lrc_enriched: no lyrics from any provider");
     Ok(None)
 }

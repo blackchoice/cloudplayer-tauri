@@ -32,4 +32,7 @@ commands.allow = [
   "record_recent_play",
   "enqueue_download",
   "fetch_song_lrc_enriched",
+  "lyrics_search_candidates",
+  "lyrics_fetch_candidate",
+  "fetch_lrc_cx_cover",
 ]

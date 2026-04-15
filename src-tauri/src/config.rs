@@ -57,9 +57,6 @@ pub struct Settings {
     pub lyrics_netease_api_base: String,
     #[serde(default = "default_lyrics_lrclib")]
     pub lyrics_lrclib_enabled: bool,
-    /// 逗号分隔：netease, atlas（amlldb TTML/YRC/LRC）, lrccx, lrclib, pjmp3；空或无效则回退内置顺序
-    #[serde(default = "default_lyrics_order")]
-    pub lyrics_provider_order: String,
     /// 主窗口关闭：`ask` 每次询问，`quit` 退出，`tray` 最小化到托盘
     #[serde(default = "default_main_window_close_action")]
     pub main_window_close_action: String,
@@ -89,10 +86,6 @@ fn default_desktop_lyrics_scale() -> f64 {
 
 fn default_lyrics_lrclib() -> bool {
     true
-}
-
-fn default_lyrics_order() -> String {
-    "netease,atlas,lrccx,lrclib,pjmp3".to_string()
 }
 
 fn default_main_window_close_action() -> String {
@@ -127,7 +120,6 @@ impl Default for Settings {
             downloads_today_count: 0,
             lyrics_netease_api_base: String::new(),
             lyrics_lrclib_enabled: default_lyrics_lrclib(),
-            lyrics_provider_order: default_lyrics_order(),
             main_window_close_action: default_main_window_close_action(),
             desktop_lyrics_color_base: default_desktop_lyrics_color_base(),
             desktop_lyrics_color_highlight: default_desktop_lyrics_color_highlight(),

@@ -46,7 +46,6 @@ pub struct SettingsPatch {
     pub download_folder: Option<String>,
     pub lyrics_netease_api_base: Option<String>,
     pub lyrics_lrclib_enabled: Option<bool>,
-    pub lyrics_provider_order: Option<String>,
     pub main_window_close_action: Option<String>,
     pub desktop_lyrics_color_base: Option<String>,
     pub desktop_lyrics_color_highlight: Option<String>,
@@ -135,9 +134,6 @@ pub fn save_settings(patch: SettingsPatch) -> Result<(), String> {
     }
     if let Some(v) = patch.lyrics_lrclib_enabled {
         s.lyrics_lrclib_enabled = v;
-    }
-    if let Some(v) = patch.lyrics_provider_order {
-        s.lyrics_provider_order = v;
     }
     if let Some(v) = patch.main_window_close_action {
         let t = v.trim().to_ascii_lowercase();
@@ -556,7 +552,7 @@ pub async fn fetch_song_lrc(
     Ok(raw.map(crate::lyrics::pack_lyrics_for_ui))
 }
 
-/// 多源歌词（默认 lrccx → netease → lrclib → pjmp3；自托管网易时 `/lyric/new` YRC 优先），由 [`Settings`] 控制顺序与开关。
+/// 多源歌词：固定顺序 QQ → 酷狗 → 网易云 → LRCLIB（与歌词替换「换」同源）；自托管网易 API 时在拉取候选后仍走 `/lyric/new` 优先。
 #[tauri::command]
 pub async fn fetch_song_lrc_enriched(
     state: State<'_, Arc<AppState>>,
@@ -564,7 +560,7 @@ pub async fn fetch_song_lrc_enriched(
 ) -> Result<Option<crate::lyrics::LyricsPayload>, String> {
     let settings = Settings::load();
     state.limiter.acquire_slot().await;
-    crate::lyrics::fetch_song_lrc_enriched(&state.client, &settings, &req).await
+    crate::lyric_replace::fetch_song_lddc_enriched(&state.client, &settings, &req).await
 }
 
 /// 封面补全：`GET https://api.lrc.cx/cover`（跟随重定向至图片 URL）。
@@ -578,6 +574,37 @@ pub async fn fetch_lrc_cx_cover(
     state.limiter.acquire_slot().await;
     let alb = album.unwrap_or_default();
     crate::lyrics::fetch_lrc_cx_cover(&state.client, &title, &artist, &alb).await
+}
+
+/// 歌词替换：多源搜索候选（QQ / 酷狗 / 网易 / LRCLIB）。
+#[tauri::command]
+pub async fn lyrics_search_candidates(
+    state: State<'_, Arc<AppState>>,
+    keyword: String,
+    duration_ms: Option<i64>,
+    sources: Option<Vec<String>>,
+) -> Result<Vec<crate::lyric_replace::LyricCandidate>, String> {
+    let settings = Settings::load();
+    state.limiter.acquire_slot().await;
+    crate::lyric_replace::lyrics_search_candidates(
+        &state.client,
+        &settings,
+        keyword,
+        duration_ms,
+        sources,
+    )
+    .await
+}
+
+/// 歌词替换：拉取选中候选的完整 [`LyricsPayload`]。
+#[tauri::command]
+pub async fn lyrics_fetch_candidate(
+    state: State<'_, Arc<AppState>>,
+    candidate: crate::lyric_replace::LyricCandidate,
+) -> Result<crate::lyrics::LyricsPayload, String> {
+    let settings = Settings::load();
+    state.limiter.acquire_slot().await;
+    crate::lyric_replace::lyrics_fetch_candidate(&state.client, &settings, candidate).await
 }
 
 #[derive(Serialize)]

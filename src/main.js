@@ -69,6 +69,15 @@ let wordLines = null;
 /** @type {string | null} */
 let lrcCacheKey = null;
 
+/** 歌词替换弹窗：多源搜索候选与预览载荷 */
+/** @type {any[]} */
+let lyricsReplaceCandidates = [];
+let lyricsReplaceSelectedIndex = -1;
+/** @type {{ lrcText: string, wordLines?: Array<any> | null } | null} */
+let lyricsReplacePreviewPayload = null;
+/** 防止快速切换搜索/行时，旧请求覆盖预览 */
+let lyricsReplaceFetchGen = 0;
+
 /** 主窗口关闭：`ask` | `quit` | `tray`（与 settings 同步） */
 let mainWindowCloseAction = "ask";
 
@@ -179,15 +188,11 @@ function normalizeCloseAction(v) {
   return t === "quit" || t === "tray" ? t : "ask";
 }
 
-/** 与 Rust `default_lyrics_order` 一致：netease、atlas 优先，其次 lrccx → lrclib → pjmp3 */
-const DEFAULT_LYRICS_ORDER = "netease,atlas,lrccx,lrclib,pjmp3";
-
 /** 偏好设置表单上次已保存/已加载的基线，用于对比是否有改动 */
 let settingsFormBaseline = {
   action: "ask",
   base: "#ffffff",
   highlight: "#ffb7d4",
-  order: DEFAULT_LYRICS_ORDER,
   neteaseApiBase: "",
 };
 
@@ -200,40 +205,15 @@ function normalizeNeteaseApiBase(raw) {
   return String(raw ?? "").trim();
 }
 
-/** 逗号分隔歌词源，去重、过滤未知 token；空则默认全顺序 */
-function normalizeLyricsProviderOrder(raw) {
-  const map = new Map([
-    ["lrccx", "lrccx"],
-    ["lrc_cx", "lrccx"],
-    ["atlas", "atlas"],
-    ["lyric_atlas", "atlas"],
-    ["netease", "netease"],
-    ["lrclib", "lrclib"],
-    ["pjmp3", "pjmp3"],
-  ]);
-  const seen = new Set();
-  const out = [];
-  for (const part of String(raw ?? "").split(",")) {
-    const k = map.get(part.trim().toLowerCase());
-    if (k && !seen.has(k)) {
-      seen.add(k);
-      out.push(k);
-    }
-  }
-  return out.length > 0 ? out.join(",") : DEFAULT_LYRICS_ORDER;
-}
-
 function getSettingsFormValues() {
   const sel = document.getElementById("setting-close-action");
   const b = document.getElementById("setting-ly-base");
   const h = document.getElementById("setting-ly-highlight");
-  const o = document.getElementById("setting-lyrics-order");
   const nb = document.getElementById("setting-netease-api-base");
   return {
     action: normalizeCloseAction(sel?.value),
     base: normalizeLyricHexInput(b?.value, "#ffffff"),
     highlight: normalizeLyricHexInput(h?.value, "#ffb7d4"),
-    order: normalizeLyricsProviderOrder(o?.value ?? ""),
     neteaseApiBase: normalizeNeteaseApiBase(nb?.value),
   };
 }
@@ -244,7 +224,6 @@ function settingsFormIsDirty() {
     cur.action !== settingsFormBaseline.action ||
     cur.base !== settingsFormBaseline.base ||
     cur.highlight !== settingsFormBaseline.highlight ||
-    cur.order !== settingsFormBaseline.order ||
     cur.neteaseApiBase !== settingsFormBaseline.neteaseApiBase
   );
 }
@@ -270,11 +249,6 @@ function fillSettingsFormFromSettings(s) {
   const h = document.getElementById("setting-ly-highlight");
   if (b) b.value = normalizeLyricHexInput(s?.desktop_lyrics_color_base ?? s?.desktopLyricsColorBase, "#ffffff");
   if (h) h.value = normalizeLyricHexInput(s?.desktop_lyrics_color_highlight ?? s?.desktopLyricsColorHighlight, "#ffb7d4");
-  const lo = document.getElementById("setting-lyrics-order");
-  if (lo) {
-    const raw = s?.lyrics_provider_order ?? s?.lyricsProviderOrder ?? "";
-    lo.value = normalizeLyricsProviderOrder(raw);
-  }
   const nba = document.getElementById("setting-netease-api-base");
   if (nba) {
     nba.value = normalizeNeteaseApiBase(
@@ -327,7 +301,6 @@ function wireSettingsFormDirtyTracking() {
   document.getElementById("setting-close-action")?.addEventListener("change", onChange);
   document.getElementById("setting-ly-base")?.addEventListener("input", onChange);
   document.getElementById("setting-ly-highlight")?.addEventListener("input", onChange);
-  document.getElementById("setting-lyrics-order")?.addEventListener("input", onChange);
   document.getElementById("setting-netease-api-base")?.addEventListener("input", onChange);
 }
 
@@ -343,7 +316,6 @@ function wirePreferencesModals() {
           main_window_close_action: cur.action,
           desktop_lyrics_color_base: cur.base,
           desktop_lyrics_color_highlight: cur.highlight,
-          lyrics_provider_order: cur.order,
           lyrics_netease_api_base: cur.neteaseApiBase,
         },
       });
@@ -363,6 +335,239 @@ function wirePreferencesModals() {
   document.getElementById("close-choice-cancel")?.addEventListener("click", () => closeCloseConfirmModal());
   document.getElementById("close-confirm-modal")?.addEventListener("click", (e) => {
     if (e.target.id === "close-confirm-modal") closeCloseConfirmModal();
+  });
+}
+
+function lyricsReplaceSourceLabel(src) {
+  const s = String(src || "").toLowerCase();
+  if (s === "qq") return "QQ";
+  if (s === "kugou") return "酷狗";
+  if (s === "netease") return "网易";
+  if (s === "lrclib") return "LRCLIB";
+  return src || "—";
+}
+
+function getLyricsReplaceSourcesFromChips() {
+  const keys = [
+    ["qq", "lyrics-replace-src-qq"],
+    ["kugou", "lyrics-replace-src-kugou"],
+    ["netease", "lyrics-replace-src-netease"],
+    ["lrclib", "lyrics-replace-src-lrclib"],
+  ];
+  const out = [];
+  for (const [id, elId] of keys) {
+    const el = document.getElementById(elId);
+    if (el && !el.disabled && el.checked) out.push(id);
+  }
+  return out;
+}
+
+function setLyricsReplaceError(msg) {
+  const el = document.getElementById("lyrics-replace-error");
+  if (!el) return;
+  if (msg) {
+    el.textContent = msg;
+    el.hidden = false;
+  } else {
+    el.textContent = "";
+    el.hidden = true;
+  }
+}
+
+function closeLyricsReplaceModal() {
+  const m = document.getElementById("lyrics-replace-modal");
+  if (m) {
+    m.hidden = true;
+    m.setAttribute("aria-hidden", "true");
+  }
+  lyricsReplaceCandidates = [];
+  lyricsReplaceSelectedIndex = -1;
+  lyricsReplacePreviewPayload = null;
+  setLyricsReplaceError("");
+}
+
+async function openLyricsReplaceModal() {
+  const m = document.getElementById("lyrics-replace-modal");
+  if (!m) return;
+  m.hidden = false;
+  m.setAttribute("aria-hidden", "false");
+  const inp = document.getElementById("lyrics-replace-keyword");
+  const cur = playQueue[playIndex];
+  const kw = cur ? `${cur.artist || ""} ${cur.title || ""}`.trim() : "";
+  if (inp) inp.value = kw;
+  setLyricsReplaceError("");
+  lyricsReplacePreviewPayload = null;
+  const applyBtn = document.getElementById("lyrics-replace-apply");
+  if (applyBtn) applyBtn.disabled = true;
+  const prev = document.getElementById("lyrics-replace-preview");
+  if (prev) prev.textContent = "";
+  try {
+    const s = await invoke("get_settings");
+    const lr = document.getElementById("lyrics-replace-src-lrclib");
+    const enabled = s.lyrics_lrclib_enabled !== false;
+    if (lr) {
+      lr.disabled = !enabled;
+      lr.checked = enabled;
+    }
+  } catch (e) {
+    console.warn("get_settings for lyrics replace", e);
+  }
+  void searchLyricsReplaceCandidates();
+}
+
+async function searchLyricsReplaceCandidates() {
+  lyricsReplaceFetchGen += 1;
+  const inp = document.getElementById("lyrics-replace-keyword");
+  const keyword = (inp?.value || "").trim();
+  const tbody = document.getElementById("lyrics-replace-tbody");
+  const applyBtn = document.getElementById("lyrics-replace-apply");
+  if (applyBtn) applyBtn.disabled = true;
+  lyricsReplacePreviewPayload = null;
+  const prev = document.getElementById("lyrics-replace-preview");
+  if (prev) prev.textContent = "";
+  setLyricsReplaceError("");
+  lyricsReplaceSelectedIndex = -1;
+  if (!keyword) {
+    setTableMutedMessage(tbody, 4, "请输入关键词");
+    return;
+  }
+  const sources = getLyricsReplaceSourcesFromChips();
+  if (!sources.length) {
+    setTableMutedMessage(tbody, 4, "请至少选择一个来源");
+    return;
+  }
+  const a = audioEl();
+  const durationMs =
+    a && a.duration && isFinite(a.duration) && a.duration > 0
+      ? Math.round(a.duration * 1000)
+      : null;
+  setTableMutedMessage(tbody, 4, "搜索中…");
+  try {
+    lyricsReplaceCandidates = await invoke("lyrics_search_candidates", {
+      keyword,
+      durationMs,
+      sources,
+    });
+  } catch (e) {
+    console.warn("lyrics_search_candidates", e);
+    setTableMutedMessage(tbody, 4, MSG_REQUEST_FAILED);
+    setLyricsReplaceError(String(e));
+    return;
+  }
+  renderLyricsReplaceTable();
+  if (lyricsReplaceCandidates.length > 0) {
+    await selectLyricsReplaceRow(0);
+  } else {
+    setTableMutedMessage(tbody, 4, "未找到结果");
+    if (prev) prev.textContent = "未找到匹配歌词，请换关键词或来源。";
+  }
+}
+
+function renderLyricsReplaceTable() {
+  const tbody = document.getElementById("lyrics-replace-tbody");
+  if (!tbody) return;
+  tbody.innerHTML = "";
+  for (let i = 0; i < lyricsReplaceCandidates.length; i++) {
+    const c = lyricsReplaceCandidates[i];
+    const tr = document.createElement("tr");
+    tr.dataset.index = String(i);
+    if (i === lyricsReplaceSelectedIndex) tr.classList.add("is-selected");
+    const tdSrc = document.createElement("td");
+    tdSrc.className = "col-lr-src";
+    tdSrc.textContent = lyricsReplaceSourceLabel(c.source);
+    const tdTitle = document.createElement("td");
+    tdTitle.textContent = c.title || "—";
+    const tdArtist = document.createElement("td");
+    tdArtist.textContent = c.artist || "—";
+    const tdDur = document.createElement("td");
+    tdDur.className = "col-lr-dur";
+    tdDur.textContent = formatDurationMs(c.durationMs);
+    tr.append(tdSrc, tdTitle, tdArtist, tdDur);
+    tr.addEventListener("click", () => {
+      void selectLyricsReplaceRow(i);
+    });
+    tbody.appendChild(tr);
+  }
+}
+
+async function selectLyricsReplaceRow(idx) {
+  if (idx < 0 || idx >= lyricsReplaceCandidates.length) return;
+  lyricsReplaceSelectedIndex = idx;
+  const gen = ++lyricsReplaceFetchGen;
+  const tbody = document.getElementById("lyrics-replace-tbody");
+  if (tbody) {
+    tbody.querySelectorAll("tr").forEach((tr, j) => {
+      tr.classList.toggle("is-selected", j === idx);
+    });
+  }
+  const applyBtn = document.getElementById("lyrics-replace-apply");
+  if (applyBtn) applyBtn.disabled = true;
+  lyricsReplacePreviewPayload = null;
+  const prev = document.getElementById("lyrics-replace-preview");
+  if (prev) prev.textContent = "加载中…";
+  setLyricsReplaceError("");
+  const cand = lyricsReplaceCandidates[idx];
+  try {
+    const raw = await invoke("lyrics_fetch_candidate", { candidate: cand });
+    if (gen !== lyricsReplaceFetchGen) return;
+    lyricsReplacePreviewPayload = raw;
+    if (prev) prev.textContent = raw?.lrcText != null ? String(raw.lrcText) : "";
+    if (applyBtn) applyBtn.disabled = !String(raw?.lrcText || "").trim();
+  } catch (e) {
+    console.warn("lyrics_fetch_candidate", e);
+    if (gen !== lyricsReplaceFetchGen) return;
+    if (prev) prev.textContent = "";
+    setLyricsReplaceError(MSG_REQUEST_FAILED);
+    if (applyBtn) applyBtn.disabled = true;
+  }
+}
+
+async function applyLyricsReplace() {
+  if (!lyricsReplacePreviewPayload) return;
+  const lt = String(lyricsReplacePreviewPayload.lrcText || "");
+  if (!lt.trim()) return;
+  const cur = playQueue[playIndex];
+  const cacheKey = cur?.local_path ? `local:${cur.local_path}` : (cur?.source_id || "").trim();
+  lrcEntries = parseLrc(lt);
+  wordLines = Array.isArray(lyricsReplacePreviewPayload.wordLines)
+    ? lyricsReplacePreviewPayload.wordLines
+    : null;
+  lrcCacheKey = cacheKey;
+  lyricsLog("lyrics replace apply: lines", lrcEntries.length, "wordLines", wordLines?.length ?? 0);
+  await syncDesktopLyrics();
+  closeLyricsReplaceModal();
+}
+
+function wireLyricsReplaceModal() {
+  document.getElementById("btn-dock-lyrics-replace")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    void openLyricsReplaceModal();
+  });
+  document.getElementById("lyrics-replace-search-btn")?.addEventListener("click", () => {
+    void searchLyricsReplaceCandidates();
+  });
+  document.getElementById("lyrics-replace-cancel")?.addEventListener("click", () => {
+    closeLyricsReplaceModal();
+  });
+  document.getElementById("lyrics-replace-apply")?.addEventListener("click", () => {
+    void applyLyricsReplace();
+  });
+  document.getElementById("lyrics-replace-modal")?.addEventListener("click", (e) => {
+    if (e.target.id === "lyrics-replace-modal") closeLyricsReplaceModal();
+  });
+  document.getElementById("lyrics-replace-keyword")?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      void searchLyricsReplaceCandidates();
+    }
+  });
+  document.addEventListener("keydown", (e) => {
+    const modal = document.getElementById("lyrics-replace-modal");
+    if (!modal || modal.hidden) return;
+    if (e.key === "Escape") {
+      e.preventDefault();
+      closeLyricsReplaceModal();
+    }
   });
 }
 
@@ -486,6 +691,8 @@ function wireDockBar() {
     if (e.target.closest(".dock-menu-anchor") || e.target.closest(".dock-menu")) return;
     closeAllDockMenus();
   });
+
+  wireLyricsReplaceModal();
 }
 
 function removeCurrentFromQueue() {
@@ -512,6 +719,18 @@ function removeCurrentFromQueue() {
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function setTableMutedMessage(tbody, colSpan, message) {
+  if (!tbody) return;
+  tbody.innerHTML = "";
+  const tr = document.createElement("tr");
+  const td = document.createElement("td");
+  td.colSpan = colSpan;
+  td.className = "muted";
+  td.textContent = String(message ?? "");
+  tr.appendChild(td);
+  tbody.appendChild(tr);
 }
 
 /** ---------- 右键菜单（对齐 Py sidebar / import_track_context_menu） ---------- */
@@ -1575,12 +1794,7 @@ async function refreshPlaylistSelect() {
     return;
   }
   sel.innerHTML = "";
-  let pls = [];
-  try {
-    pls = await invoke("list_playlists");
-  } catch (e) {
-    console.warn("list_playlists", e);
-  }
+  const pls = await listPlaylistsCached();
   for (const p of pls) {
     const o = document.createElement("option");
     o.value = String(p.id);
@@ -1670,9 +1884,7 @@ function renderPlaylistDetailTable() {
   if (coverEl) coverEl.src = heroCover;
 
   if (!playlistDetailRows.length) {
-    const tr = document.createElement("tr");
-    tr.innerHTML = `<td colspan="5" class="muted">暂无导入曲目，或请从左侧选择其它歌单。</td>`;
-    tbody.appendChild(tr);
+    setTableMutedMessage(tbody, 5, "暂无导入曲目，或请从左侧选择其它歌单。");
     return;
   }
 
@@ -2065,9 +2277,7 @@ function renderSearchTable() {
   tbody.innerHTML = "";
   const rows = searchState.results;
   if (!rows.length) {
-    const tr = document.createElement("tr");
-    tr.innerHTML = `<td colspan="5" class="muted">无结果（或站点 HTML 已变化）。</td>`;
-    tbody.appendChild(tr);
+    setTableMutedMessage(tbody, 5, "无结果（或站点 HTML 已变化）。");
     return;
   }
   for (let i = 0; i < rows.length; i++) {
@@ -2103,7 +2313,7 @@ async function fetchSearchPage() {
   searchState.busy = true;
   updateSearchToolbar();
   const tbody = document.querySelector("#search-table tbody");
-  if (tbody) tbody.innerHTML = `<tr><td colspan="5" class="muted">搜索中…</td></tr>`;
+  setTableMutedMessage(tbody, 5, "搜索中…");
   try {
     const res = await invoke("search_songs", { keyword: kw, page: searchState.page });
     searchState.results = res.results || [];
@@ -2111,9 +2321,7 @@ async function fetchSearchPage() {
     renderSearchTable();
   } catch (e) {
     warnRequestFailed(e, "search_songs");
-    if (tbody) {
-      tbody.innerHTML = `<tr><td colspan="5" class="muted">${escapeHtml(MSG_REQUEST_FAILED)}</td></tr>`;
-    }
+    setTableMutedMessage(tbody, 5, MSG_REQUEST_FAILED);
     searchState.results = [];
     searchState.hasNext = false;
   } finally {
@@ -2333,7 +2541,7 @@ function renderDownloadQueueTable() {
   if (!tbody) return;
   const list = [...downloadTasksBySourceId.values()];
   if (!list.length) {
-    tbody.innerHTML = '<tr><td colspan="4" class="muted">队列为空。在「发现」或歌单右键选择「下载」。</td></tr>';
+    setTableMutedMessage(tbody, 4, "队列为空。在「发现」或歌单右键选择「下载」。");
     return;
   }
   tbody.innerHTML = "";
@@ -2382,8 +2590,7 @@ function renderRecentPlaysTable() {
   const tbody = document.querySelector("#recent-plays-table tbody");
   if (!tbody) return;
   if (!sessionRecentPlays.length) {
-    tbody.innerHTML =
-      '<tr><td colspan="4" class="muted">暂无记录。在「发现」或「本地」播放曲目后将显示在此处。</td></tr>';
+    setTableMutedMessage(tbody, 4, "暂无记录。在「发现」或「本地」播放曲目后将显示在此处。");
     return;
   }
   tbody.innerHTML = "";
@@ -2401,15 +2608,13 @@ function renderRecentPlaysTable() {
 async function refreshLocalLibraryTable() {
   const tbody = document.querySelector("#local-library-table tbody");
   if (!tbody) return;
-  tbody.innerHTML = '<tr><td colspan="4" class="muted">加载中…</td></tr>';
+  setTableMutedMessage(tbody, 4, "加载中…");
   try {
     const rows = await invoke("list_local_songs");
     localLibraryRows = Array.isArray(rows) ? rows : [];
     tbody.innerHTML = "";
     if (!localLibraryRows.length) {
-      const tr = document.createElement("tr");
-      tr.innerHTML = '<td colspan="4" class="muted">暂无本地曲库。请点击「选择文件夹并扫描」。</td>';
-      tbody.appendChild(tr);
+      setTableMutedMessage(tbody, 4, "暂无本地曲库。请点击「选择文件夹并扫描」。");
       return;
     }
     localLibraryRows.forEach((r, i) => {
@@ -2425,7 +2630,7 @@ async function refreshLocalLibraryTable() {
     });
   } catch (e) {
     warnRequestFailed(e, "list_local_songs");
-    tbody.innerHTML = `<tr><td colspan="4" class="muted">${escapeHtml(MSG_REQUEST_FAILED)}</td></tr>`;
+    setTableMutedMessage(tbody, 4, MSG_REQUEST_FAILED);
   }
 }
 
@@ -2795,8 +3000,7 @@ async function loadSettings() {
     }
     refreshLyricsLockMenuLabel();
     if (desktopLyricsOpen) {
-      void broadcastDesktopLyricsLock();
-      void broadcastDesktopLyricsColors();
+      scheduleDesktopLyricsStyleSync();
     }
     if (s?.desktop_lyrics_visible) {
       queueMicrotask(() => {

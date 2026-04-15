@@ -6,7 +6,13 @@ mod download;
 mod import_enrich;
 mod import_playlist;
 mod lrc_format;
+mod lrc_embedded;
+mod lddc_parse;
 mod lyrics;
+mod qrc_des;
+mod lyric_qq;
+mod lyric_kugou;
+mod lyric_replace;
 mod pjmp3;
 mod rate_limiter;
 mod share_link;
@@ -140,6 +146,8 @@ pub fn run() {
             commands::fetch_song_lrc,
             commands::fetch_song_lrc_enriched,
             commands::fetch_lrc_cx_cover,
+            commands::lyrics_search_candidates,
+            commands::lyrics_fetch_candidate,
             commands::fetch_share_playlist,
             commands::list_local_songs,
             commands::scan_music_folder,

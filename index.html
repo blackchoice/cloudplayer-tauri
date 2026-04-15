@@ -226,24 +226,9 @@
             <section class="page" data-page="settings" aria-label="偏好设置">
               <h1 class="page-title">偏好设置</h1>
               <p class="page-hint muted">
-                关闭主窗口行为、歌词来源顺序、网易云 API 根地址（可选）与桌面歌词颜色将保存到本地配置。
+                关闭主窗口行为、网易云 API 根地址（可选）与桌面歌词颜色将保存到本地配置。播放页歌词固定为 QQ → 酷狗 → 网易云 → LRCLIB（与「换」歌词替换同源）。
               </p>
               <div class="settings-form">
-                <div class="settings-field">
-                  <label for="setting-lyrics-order" class="settings-field-label">歌词来源顺序</label>
-                  <input
-                    type="text"
-                    id="setting-lyrics-order"
-                    class="settings-field-control settings-field-control--text"
-                    spellcheck="false"
-                    autocomplete="off"
-                    placeholder="netease,atlas,lrccx,lrclib,pjmp3"
-                    aria-describedby="setting-lyrics-order-hint"
-                  />
-                  <p id="setting-lyrics-order-hint" class="settings-field-hint muted">
-                    英文逗号分隔，从前到后尝试。可选：<code>netease</code>、<code>atlas</code>（amlldb 逐字优先）、<code>lrccx</code>、<code>lrclib</code>、<code>pjmp3</code>。自托管网易云 API 时 <code>netease</code> 可拉 YRC 逐字。
-                  </p>
-                </div>
                 <div class="settings-field">
                   <label for="setting-netease-api-base" class="settings-field-label">网易云 API 根地址（可选）</label>
                   <input
@@ -364,6 +349,14 @@
               <button type="button" class="dock-menu__item" data-quality="128">标准</button>
             </div>
           </div>
+          <button
+            type="button"
+            id="btn-dock-lyrics-replace"
+            class="dock-ic dock-ic--accent"
+            title="搜索并替换当前歌词（多源）"
+          >
+            换
+          </button>
           <button type="button" id="btn-dock-lyrics" class="dock-ic dock-ic--accent" title="桌面歌词（独立窗口）">词</button>
           <button type="button" id="btn-dock-queue" class="dock-ic" title="播放列表">☰</button>
           <label class="dock-vol" title="音量">
@@ -372,6 +365,66 @@
           </label>
         </div>
       </footer>
+      <div id="lyrics-replace-modal" class="modal-overlay" hidden aria-hidden="true">
+        <div
+          class="modal-dialog modal-dialog--lyrics-replace"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="lyrics-replace-title"
+        >
+          <h3 id="lyrics-replace-title" class="modal-title">替换歌词</h3>
+          <p class="modal-desc">从 QQ 音乐、酷狗、网易云、LRCLIB 搜索并预览，应用到当前播放曲目。</p>
+          <div class="lyrics-replace-search">
+            <input
+              type="search"
+              id="lyrics-replace-keyword"
+              class="lyrics-replace-input"
+              placeholder="歌手 + 歌名"
+              autocomplete="off"
+            />
+            <button type="button" class="btn-accent" id="lyrics-replace-search-btn">搜索</button>
+          </div>
+          <div class="lyrics-replace-sources" role="group" aria-label="歌词来源">
+            <label class="lyrics-replace-chip"
+              ><input type="checkbox" id="lyrics-replace-src-qq" checked /> <span class="src-qq">QQ</span></label
+            >
+            <label class="lyrics-replace-chip"
+              ><input type="checkbox" id="lyrics-replace-src-kugou" checked /> <span class="src-kg">酷狗</span></label
+            >
+            <label class="lyrics-replace-chip"
+              ><input type="checkbox" id="lyrics-replace-src-netease" checked />
+              <span class="src-ne">网易</span></label
+            >
+            <label class="lyrics-replace-chip"
+              ><input type="checkbox" id="lyrics-replace-src-lrclib" checked /> <span class="src-lr">LRCLIB</span></label
+            >
+          </div>
+          <div class="lyrics-replace-body">
+            <div class="lyrics-replace-results-wrap">
+              <table class="lyrics-replace-table" aria-label="搜索结果">
+                <thead>
+                  <tr>
+                    <th class="col-lr-src">来源</th>
+                    <th>标题</th>
+                    <th>艺人</th>
+                    <th class="col-lr-dur">时长</th>
+                  </tr>
+                </thead>
+                <tbody id="lyrics-replace-tbody"></tbody>
+              </table>
+            </div>
+            <div class="lyrics-replace-preview-wrap">
+              <div class="lyrics-replace-preview-label">预览</div>
+              <pre id="lyrics-replace-preview" class="lyrics-replace-preview"></pre>
+            </div>
+          </div>
+          <p id="lyrics-replace-error" class="lyrics-replace-error" hidden></p>
+          <div class="modal-actions modal-actions--row modal-actions--end">
+            <button type="button" class="btn-outline" id="lyrics-replace-cancel">取消</button>
+            <button type="button" class="btn-accent" id="lyrics-replace-apply" disabled>应用</button>
+          </div>
+        </div>
+      </div>
       <div id="close-confirm-modal" class="modal-overlay" hidden aria-hidden="true">
         <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="close-modal-title">
           <h3 id="close-modal-title" class="modal-title">关闭主窗口</h3>
