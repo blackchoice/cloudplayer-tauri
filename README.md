@@ -135,7 +135,7 @@ Collect assets from `src-tauri/target/release/bundle/` (e.g. `.msi`, `.exe`, etc
 git add .
 git commit -m "release: v0.1.0"
 git tag v0.1.0
-git push origin main --tags
+git push origin master --tags
 ```
 
 2. Open your GitHub repo -> **Releases** -> **Draft a new release**
