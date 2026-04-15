@@ -57,7 +57,7 @@ pub struct Settings {
     pub lyrics_netease_api_base: String,
     #[serde(default = "default_lyrics_lrclib")]
     pub lyrics_lrclib_enabled: bool,
-    /// 逗号分隔：atlas（amlldb TTML/YRC/LRC）, netease, lrccx, lrclib, pjmp3；空或无效则回退内置顺序
+    /// 逗号分隔：netease, atlas（amlldb TTML/YRC/LRC）, lrccx, lrclib, pjmp3；空或无效则回退内置顺序
     #[serde(default = "default_lyrics_order")]
     pub lyrics_provider_order: String,
     /// 主窗口关闭：`ask` 每次询问，`quit` 退出，`tray` 最小化到托盘
@@ -92,7 +92,7 @@ fn default_lyrics_lrclib() -> bool {
 }
 
 fn default_lyrics_order() -> String {
-    "atlas,netease,lrccx,lrclib,pjmp3".to_string()
+    "netease,atlas,lrccx,lrclib,pjmp3".to_string()
 }
 
 fn default_main_window_close_action() -> String {

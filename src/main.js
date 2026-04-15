@@ -179,8 +179,8 @@ function normalizeCloseAction(v) {
   return t === "quit" || t === "tray" ? t : "ask";
 }
 
-/** 与 Rust `default_lyrics_order` 一致：atlas、netease 优先，其次 lrccx → lrclib → pjmp3 */
-const DEFAULT_LYRICS_ORDER = "atlas,netease,lrccx,lrclib,pjmp3";
+/** 与 Rust `default_lyrics_order` 一致：netease、atlas 优先，其次 lrccx → lrclib → pjmp3 */
+const DEFAULT_LYRICS_ORDER = "netease,atlas,lrccx,lrclib,pjmp3";
 
 /** 偏好设置表单上次已保存/已加载的基线，用于对比是否有改动 */
 let settingsFormBaseline = {
@@ -188,11 +188,16 @@ let settingsFormBaseline = {
   base: "#ffffff",
   highlight: "#ffb7d4",
   order: DEFAULT_LYRICS_ORDER,
+  neteaseApiBase: "",
 };
 
 function normalizeLyricHexInput(x, def) {
   const t = (x || "").trim();
   return /^#[0-9a-fA-F]{6}$/.test(t) ? t.toLowerCase() : def;
+}
+
+function normalizeNeteaseApiBase(raw) {
+  return String(raw ?? "").trim();
 }
 
 /** 逗号分隔歌词源，去重、过滤未知 token；空则默认全顺序 */
@@ -223,11 +228,13 @@ function getSettingsFormValues() {
   const b = document.getElementById("setting-ly-base");
   const h = document.getElementById("setting-ly-highlight");
   const o = document.getElementById("setting-lyrics-order");
+  const nb = document.getElementById("setting-netease-api-base");
   return {
     action: normalizeCloseAction(sel?.value),
     base: normalizeLyricHexInput(b?.value, "#ffffff"),
     highlight: normalizeLyricHexInput(h?.value, "#ffb7d4"),
     order: normalizeLyricsProviderOrder(o?.value ?? ""),
+    neteaseApiBase: normalizeNeteaseApiBase(nb?.value),
   };
 }
 
@@ -237,7 +244,8 @@ function settingsFormIsDirty() {
     cur.action !== settingsFormBaseline.action ||
     cur.base !== settingsFormBaseline.base ||
     cur.highlight !== settingsFormBaseline.highlight ||
-    cur.order !== settingsFormBaseline.order
+    cur.order !== settingsFormBaseline.order ||
+    cur.neteaseApiBase !== settingsFormBaseline.neteaseApiBase
   );
 }
 
@@ -266,6 +274,12 @@ function fillSettingsFormFromSettings(s) {
   if (lo) {
     const raw = s?.lyrics_provider_order ?? s?.lyricsProviderOrder ?? "";
     lo.value = normalizeLyricsProviderOrder(raw);
+  }
+  const nba = document.getElementById("setting-netease-api-base");
+  if (nba) {
+    nba.value = normalizeNeteaseApiBase(
+      s?.lyrics_netease_api_base ?? s?.lyricsNeteaseApiBase ?? ""
+    );
   }
   syncSettingsFormBaselineFromDom();
 }
@@ -314,6 +328,7 @@ function wireSettingsFormDirtyTracking() {
   document.getElementById("setting-ly-base")?.addEventListener("input", onChange);
   document.getElementById("setting-ly-highlight")?.addEventListener("input", onChange);
   document.getElementById("setting-lyrics-order")?.addEventListener("input", onChange);
+  document.getElementById("setting-netease-api-base")?.addEventListener("input", onChange);
 }
 
 function wirePreferencesModals() {
@@ -329,6 +344,7 @@ function wirePreferencesModals() {
           desktop_lyrics_color_base: cur.base,
           desktop_lyrics_color_highlight: cur.highlight,
           lyrics_provider_order: cur.order,
+          lyrics_netease_api_base: cur.neteaseApiBase,
         },
       });
       mainWindowCloseAction = cur.action;

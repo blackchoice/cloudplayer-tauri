@@ -145,8 +145,8 @@ fn parse_order(s: &str) -> Vec<Prov> {
         }
     }
     if out.is_empty() {
-        out.push(Prov::Atlas);
         out.push(Prov::Netease);
+        out.push(Prov::Atlas);
         out.push(Prov::LrcCx);
         out.push(Prov::Lrclib);
         out.push(Prov::Pjmp3);
