@@ -59,6 +59,12 @@ pub struct Settings {
     /// 逗号分隔：pjmp3, netease, lrclib
     #[serde(default = "default_lyrics_order")]
     pub lyrics_provider_order: String,
+    /// 导入网易云分享歌单时，是否启用自定义 Cookie 请求（用于需要登录态的公开可见歌单）。
+    #[serde(default)]
+    pub share_netease_cookie_enabled: bool,
+    /// 导入网易云分享歌单时使用的 Cookie 原文（可留空）。
+    #[serde(default)]
+    pub share_netease_cookie: String,
 }
 
 fn default_volume() -> f64 {
@@ -106,6 +112,8 @@ impl Default for Settings {
             lyrics_netease_api_base: String::new(),
             lyrics_lrclib_enabled: default_lyrics_lrclib(),
             lyrics_provider_order: default_lyrics_order(),
+            share_netease_cookie_enabled: false,
+            share_netease_cookie: String::new(),
         }
     }
 }

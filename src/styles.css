@@ -945,6 +945,21 @@ body {
   align-items: center;
 }
 
+.import-share-cookie-row {
+  display: grid;
+  grid-template-columns: 280px minmax(260px, 1fr);
+  gap: 10px;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.import-share-cookie-row > label {
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .import-link-input {
   flex: 1;
   min-width: 200px;

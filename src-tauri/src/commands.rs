@@ -47,6 +47,8 @@ pub struct SettingsPatch {
     pub lyrics_netease_api_base: Option<String>,
     pub lyrics_lrclib_enabled: Option<bool>,
     pub lyrics_provider_order: Option<String>,
+    pub share_netease_cookie_enabled: Option<bool>,
+    pub share_netease_cookie: Option<String>,
 }
 
 /// 由主窗口调用：在原生层对「lyrics」窗设置鼠标穿透（不依赖子 Webview 的 ACL）。
@@ -103,6 +105,12 @@ pub fn save_settings(patch: SettingsPatch) -> Result<(), String> {
     }
     if let Some(v) = patch.lyrics_provider_order {
         s.lyrics_provider_order = v;
+    }
+    if let Some(v) = patch.share_netease_cookie_enabled {
+        s.share_netease_cookie_enabled = v;
+    }
+    if let Some(v) = patch.share_netease_cookie {
+        s.share_netease_cookie = v;
     }
     s.save()
 }
@@ -529,7 +537,16 @@ pub async fn fetch_share_playlist(
         return Err("请先粘贴分享链接。".to_string());
     }
     state.limiter.acquire_slot().await;
-    let (playlist_name, tracks) = crate::share_link::fetch_playlist_from_share_url(&state.client, u).await?;
+    let settings = Settings::load();
+    let (playlist_name, tracks) = crate::share_link::fetch_playlist_from_share_url(
+        &state.client,
+        u,
+        crate::share_link::ShareFetchOptions {
+            netease_cookie_enabled: settings.share_netease_cookie_enabled,
+            netease_cookie: settings.share_netease_cookie,
+        },
+    )
+    .await?;
     Ok(SharePlaylistResponse {
         playlist_name,
         tracks,

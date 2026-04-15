@@ -73,6 +73,18 @@ let playlistDetailRows = [];
 
 /** 分享链接拉取成功后建议的歌单名（网易云 / QQ 返回） */
 let importShareSuggestedName = "";
+let neteaseCookieEnabled = false;
+let neteaseCookieValue = "";
+
+function syncNeteaseCookieUi() {
+  const chk = document.getElementById("opt-netease-cookie-enabled");
+  const inp = document.getElementById("opt-netease-cookie");
+  if (chk) chk.checked = !!neteaseCookieEnabled;
+  if (inp) {
+    inp.value = neteaseCookieValue || "";
+    inp.disabled = !neteaseCookieEnabled;
+  }
+}
 
 /** 与 Py RecentPlaysPage：本会话内最近播放，最多 100 条 */
 const RECENT_SESSION_MAX = 100;
@@ -1294,6 +1306,31 @@ function downloadBlob(filename, text, mime) {
 }
 
 function wireImportPage() {
+  const cookieEnableEl = document.getElementById("opt-netease-cookie-enabled");
+  const cookieInputEl = document.getElementById("opt-netease-cookie");
+  const persistNeteaseCookieSettings = async () => {
+    try {
+      await invoke("save_settings", {
+        patch: {
+          share_netease_cookie_enabled: !!neteaseCookieEnabled,
+          share_netease_cookie: neteaseCookieValue || "",
+        },
+      });
+    } catch (e) {
+      console.warn("save_settings share_netease_cookie", e);
+    }
+  };
+  cookieEnableEl?.addEventListener("change", () => {
+    neteaseCookieEnabled = !!cookieEnableEl.checked;
+    syncNeteaseCookieUi();
+    void persistNeteaseCookieSettings();
+  });
+  cookieInputEl?.addEventListener("change", () => {
+    neteaseCookieValue = (cookieInputEl.value || "").trim();
+    void persistNeteaseCookieSettings();
+  });
+  syncNeteaseCookieUi();
+
   document.getElementById("btn-import-parse")?.addEventListener("click", async () => {
     const raw = document.getElementById("import-text")?.value?.trim() ?? "";
     if (!raw) return;
@@ -2207,6 +2244,9 @@ async function loadSettings() {
     } else {
       updateDownloadFolderHint("");
     }
+    neteaseCookieEnabled = !!(s && s.share_netease_cookie_enabled);
+    neteaseCookieValue = (s && (s.share_netease_cookie || "")) || "";
+    syncNeteaseCookieUi();
     refreshLyricsLockMenuLabel();
     if (desktopLyricsOpen) void broadcastDesktopLyricsLock();
     if (s?.desktop_lyrics_visible) {
