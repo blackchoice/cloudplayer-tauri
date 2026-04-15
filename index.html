@@ -225,8 +225,23 @@
             </section>
             <section class="page" data-page="settings" aria-label="偏好设置">
               <h1 class="page-title">偏好设置</h1>
-              <p class="page-hint muted">关闭主窗口行为与桌面歌词颜色将保存到本地配置。</p>
+              <p class="page-hint muted">关闭主窗口行为、歌词来源顺序与桌面歌词颜色将保存到本地配置。</p>
               <div class="settings-form">
+                <div class="settings-field">
+                  <label for="setting-lyrics-order" class="settings-field-label">歌词来源顺序</label>
+                  <input
+                    type="text"
+                    id="setting-lyrics-order"
+                    class="settings-field-control settings-field-control--text"
+                    spellcheck="false"
+                    autocomplete="off"
+                    placeholder="atlas,netease,lrccx,lrclib,pjmp3"
+                    aria-describedby="setting-lyrics-order-hint"
+                  />
+                  <p id="setting-lyrics-order-hint" class="settings-field-hint muted">
+                    英文逗号分隔，从前到后尝试。可选：<code>atlas</code>（amlldb 逐字优先）、<code>netease</code>、<code>lrccx</code>、<code>lrclib</code>、<code>pjmp3</code>。自托管网易云 API 时 <code>netease</code> 可拉 YRC 逐字。
+                  </p>
+                </div>
                 <div class="settings-field">
                   <label for="setting-close-action" class="settings-field-label">关闭主窗口时</label>
                   <select id="setting-close-action" class="import-select import-select--wide settings-field-control">

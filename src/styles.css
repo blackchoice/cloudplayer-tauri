@@ -1356,6 +1356,28 @@ body {
   max-width: 360px;
 }
 
+.settings-field-control--text {
+  box-sizing: border-box;
+  max-width: 100%;
+  padding: 8px 10px;
+  font-size: 13px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-card);
+  color: var(--text);
+  font-family: ui-monospace, system-ui, sans-serif;
+}
+
+.settings-field-hint {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.settings-field-hint code {
+  font-size: 11px;
+}
+
 .settings-colors-row {
   display: flex;
   flex-wrap: wrap;

@@ -550,19 +550,34 @@ pub async fn fetch_song_lrc(
     if sid.is_empty() {
         return Err("无效的歌曲 ID".to_string());
     }
+    eprintln!("[lyrics] command fetch_song_lrc song_id={sid}");
     state.limiter.acquire_slot().await;
-    crate::pjmp3::fetch_song_lrc_text(&state.client, sid).await
+    let raw = crate::pjmp3::fetch_song_lrc_text(&state.client, sid).await?;
+    Ok(raw.map(crate::lyrics::pack_lyrics_for_ui))
 }
 
-/// 多源歌词（pjmp3 → 可选网易云 → 可选 LRCLIB），由 [`Settings`] 控制顺序与开关。
+/// 多源歌词（默认 lrccx → netease → lrclib → pjmp3；自托管网易时 `/lyric/new` YRC 优先），由 [`Settings`] 控制顺序与开关。
 #[tauri::command]
 pub async fn fetch_song_lrc_enriched(
     state: State<'_, Arc<AppState>>,
     req: crate::lyrics::LyricsFetchIn,
-) -> Result<Option<String>, String> {
+) -> Result<Option<crate::lyrics::LyricsPayload>, String> {
     let settings = Settings::load();
     state.limiter.acquire_slot().await;
     crate::lyrics::fetch_song_lrc_enriched(&state.client, &settings, &req).await
+}
+
+/// 封面补全：`GET https://api.lrc.cx/cover`（跟随重定向至图片 URL）。
+#[tauri::command]
+pub async fn fetch_lrc_cx_cover(
+    state: State<'_, Arc<AppState>>,
+    title: String,
+    artist: String,
+    album: Option<String>,
+) -> Result<Option<String>, String> {
+    state.limiter.acquire_slot().await;
+    let alb = album.unwrap_or_default();
+    crate::lyrics::fetch_lrc_cx_cover(&state.client, &title, &artist, &alb).await
 }
 
 #[derive(Serialize)]

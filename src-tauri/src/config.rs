@@ -51,12 +51,13 @@ pub struct Settings {
     pub downloads_today_date: String,
     #[serde(default)]
     pub downloads_today_count: i64,
-    /// 非官方网易云 API 根 URL（如自托管 NeteaseCloudMusicApi），空则不启用
+    /// 非官方网易云 API 根 URL（如自托管 NeteaseCloudMusicApiEnhanced），空则不启用。
+    /// 启用时优先请求 `GET /lyric/new` 获取 YRC 并转为 LRC，失败再 `GET /lyric`。
     #[serde(default)]
     pub lyrics_netease_api_base: String,
     #[serde(default = "default_lyrics_lrclib")]
     pub lyrics_lrclib_enabled: bool,
-    /// 逗号分隔：pjmp3, netease, lrclib
+    /// 逗号分隔：atlas（amlldb TTML/YRC/LRC）, netease, lrccx, lrclib, pjmp3；空或无效则回退内置顺序
     #[serde(default = "default_lyrics_order")]
     pub lyrics_provider_order: String,
     /// 主窗口关闭：`ask` 每次询问，`quit` 退出，`tray` 最小化到托盘
@@ -91,7 +92,7 @@ fn default_lyrics_lrclib() -> bool {
 }
 
 fn default_lyrics_order() -> String {
-    "pjmp3,netease,lrclib".to_string()
+    "atlas,netease,lrccx,lrclib,pjmp3".to_string()
 }
 
 fn default_main_window_close_action() -> String {

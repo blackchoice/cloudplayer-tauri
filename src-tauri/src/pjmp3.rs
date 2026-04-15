@@ -673,10 +673,6 @@ pub fn extract_lrc_urls(html: &str) -> Vec<String> {
     out
 }
 
-fn looks_like_lrc(text: &str) -> bool {
-    let t = text.trim_start();
-    t.starts_with('[') || t.contains("[00:") || t.contains("[01:") || t.contains("[02:")
-}
 
 async fn download_text_with_song_referer(
     client: &reqwest::Client,
@@ -727,18 +723,34 @@ async fn download_text_with_song_referer(
 pub async fn fetch_song_lrc_text(client: &reqwest::Client, song_id: &str) -> Result<Option<String>, String> {
     let sid = song_id.trim();
     if sid.is_empty() {
+        eprintln!("[lyrics] pjmp3 fetch_song_lrc_text: empty song id");
         return Err("无效的歌曲 ID".to_string());
     }
+    eprintln!("[lyrics] pjmp3 fetch_song_lrc_text song_id={sid}");
     let song_page = format!("{}/song.php?id={}", BASE_URL.trim_end_matches('/'), sid);
     let html = fetch_song_page_html(client, sid).await?;
     let urls = extract_lrc_urls(&html);
+    eprintln!("[lyrics] pjmp3 extracted {} .lrc url(s)", urls.len());
     for u in urls {
         match download_text_with_song_referer(client, &u, &song_page).await {
-            Ok(t) if looks_like_lrc(&t) => return Ok(Some(t)),
-            Ok(_) => continue,
-            Err(_) => continue,
+            Ok(t) if crate::lrc_format::has_lrc_timestamp_tags(&t) => {
+                eprintln!("[lyrics] pjmp3 downloaded lrc chars={} url={u}", t.len());
+                return Ok(Some(t));
+            }
+            Ok(t) => {
+                eprintln!(
+                    "[lyrics] pjmp3 skip url (not lrc-like) chars={} url={u}",
+                    t.len()
+                );
+                continue;
+            }
+            Err(e) => {
+                eprintln!("[lyrics] pjmp3 download failed url={u} err={e}");
+                continue;
+            }
         }
     }
+    eprintln!("[lyrics] pjmp3: no valid lrc from song page");
     Ok(None)
 }
 

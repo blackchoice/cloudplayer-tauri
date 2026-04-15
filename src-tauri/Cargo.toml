@@ -1,6 +1,6 @@
 [package]
 name = "cloudplayer-tauri"
-version = "1.1.0"
+version = "1.1.1"
 description = "CloudPlayer desktop (Tauri / Rust)"
 edition = "2021"
 
@@ -30,8 +30,10 @@ image = "0.25"
 imageproc = "0.25"
 rand = "0.8"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+# LRC / YRC / TTML（Lyric-Atlas、amll-ttml-db 等）
+amll-lyric = { version = "0.3", default-features = false, features = ["lrc", "yrc", "ttml"] }
 
 [profile.release]
-panic = "abort"
+panic = "abort" 
 codegen-units = 1
 lto = true

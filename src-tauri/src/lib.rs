@@ -5,6 +5,7 @@ mod db;
 mod download;
 mod import_enrich;
 mod import_playlist;
+mod lrc_format;
 mod lyrics;
 mod pjmp3;
 mod rate_limiter;
@@ -138,6 +139,7 @@ pub fn run() {
             commands::start_import_enrich,
             commands::fetch_song_lrc,
             commands::fetch_song_lrc_enriched,
+            commands::fetch_lrc_cx_cover,
             commands::fetch_share_playlist,
             commands::list_local_songs,
             commands::scan_music_folder,
