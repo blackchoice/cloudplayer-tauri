@@ -2486,6 +2486,7 @@ async function persistRecentPlaySnapshot(snap) {
           cover_url: snap.cover_url ?? null,
           pjmp3_source_id: snap.source_id,
           file_path: null,
+          play_url: snap.play_url && String(snap.play_url).trim() ? String(snap.play_url).trim() : null,
         },
       });
     }
@@ -2494,22 +2495,27 @@ async function persistRecentPlaySnapshot(snap) {
   }
 }
 
-function pushSessionRecentFromCurrentTrack() {
+/**
+ * @param {string | null} [onlinePlayUrl] 在线曲目本次实际使用的 http(s) 试听直链（非 asset 本地文件）
+ */
+function pushSessionRecentFromCurrentTrack(onlinePlayUrl = null) {
   const it = playQueue[playIndex];
   if (!it) return;
-  /** @type {{ source_id?: string, title: string, artist: string, album?: string, cover_url?: string | null, local_path?: string }} */
+  /** @type {{ source_id?: string, title: string, artist: string, album?: string, cover_url?: string | null, local_path?: string, play_url?: string }} */
   let snap;
   if (it.local_path) {
     snap = { title: it.title, artist: it.artist || "", local_path: it.local_path };
   } else {
     const sid = (it.source_id || "").trim();
     if (!sid) return;
+    const pu = onlinePlayUrl && String(onlinePlayUrl).trim() ? String(onlinePlayUrl).trim() : "";
     snap = {
       source_id: sid,
       title: it.title,
       artist: it.artist || "",
       album: it.album || "",
       cover_url: it.cover_url || null,
+      ...(pu ? { play_url: pu } : {}),
     };
   }
   const key = snap.local_path ? `L:${snap.local_path}` : `O:${snap.source_id}`;
@@ -2782,6 +2788,8 @@ async function playFromQueueIndex(idx) {
   });
   const playBtn = document.getElementById("btn-player-play");
   const a = audioEl();
+  /** 在线且最终走直链时写入最近播放，供下次「播放记录试听链接」优先 */
+  let onlineResolvedPlayUrl = null;
   try {
     let assetUrl;
     if (item.local_path) {
@@ -2803,7 +2811,7 @@ async function playFromQueueIndex(idx) {
       }
       assetUrl = convertFileSrc(item.local_path);
     } else {
-      /** 后端顺序：已下载文件 → 试听缓存文件 → 拉取并缓存试听 → 直链 URL */
+      /** 后端顺序：本地曲库 songs → 下载目录同名文件 → 试听缓存 → 最近播放直链 → 拉取试听/直链 */
       const resolveRetryBudgetMs = 5000;
       const resolveRetryGapMs = 200;
       const resolveT0 = Date.now();
@@ -2833,6 +2841,7 @@ async function playFromQueueIndex(idx) {
       if (!resolved) throw lastErr ?? new Error("resolve_online_play failed");
       if (resolved.kind === "url" && resolved.url) {
         assetUrl = resolved.url;
+        onlineResolvedPlayUrl = resolved.url;
       } else if (resolved.kind === "file" && resolved.path) {
         assetUrl = convertFileSrc(resolved.path);
       } else {
@@ -2847,7 +2856,7 @@ async function playFromQueueIndex(idx) {
     audioSourceGeneration = generation;
     await a.play();
     if (generation !== playLoadGeneration) return;
-    pushSessionRecentFromCurrentTrack();
+    pushSessionRecentFromCurrentTrack(onlineResolvedPlayUrl);
     updatePlayerChrome({
       title: item.title,
       sub: formatNowPlayingSubtitle(item),

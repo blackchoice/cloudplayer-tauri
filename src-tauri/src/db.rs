@@ -84,6 +84,7 @@ pub fn open_and_init() -> Result<Connection, rusqlite::Error> {
             cover_url TEXT,
             pjmp3_source_id TEXT,
             file_path TEXT,
+            play_url TEXT NOT NULL DEFAULT '',
             played_at INTEGER NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_recent_played_at ON recent_plays(played_at DESC);
@@ -113,6 +114,7 @@ pub fn open_and_init() -> Result<Connection, rusqlite::Error> {
         "ALTER TABLE playlist_import_items ADD COLUMN cover_cache_path TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE playlist_import_items ADD COLUMN duration_ms INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE playlist_import_items ADD COLUMN audio_cache_path TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE recent_plays ADD COLUMN play_url TEXT NOT NULL DEFAULT ''",
     ] {
         let _ = conn.execute(stmt, []);
     }
