@@ -12,6 +12,17 @@ use crate::lyrics::{line_only_payload, LyricsPayload};
 const QRC_KEY: &[u8; 24] = b"!@#)(*$%123ZXC!@!@#)(NHL";
 const MUSICU_URL: &str = "https://u.y.qq.com/cgi-bin/musicu.fcg";
 
+/// Prefix of `s` with at most `max_chars` Unicode scalar values (never splits UTF-8).
+fn utf8_prefix_chars(s: &str, max_chars: usize) -> &str {
+    if max_chars == 0 {
+        return "";
+    }
+    match s.char_indices().nth(max_chars) {
+        None => s,
+        Some((idx, _)) => &s[..idx],
+    }
+}
+
 fn qrc_decrypt_hex(encrypted_hex: &str) -> Result<String, String> {
     let encrypted_hex = encrypted_hex.trim();
     if encrypted_hex.is_empty() {
@@ -330,15 +341,15 @@ fn payload_from_play_lyric_data(data: &Value) -> Result<LyricsPayload, String> {
         "[lyric_qq] lyric field len={} is_hex={} preview={:?}",
         lyric.len(),
         is_hex,
-        &lyric[..lyric.len().min(120)]
+        utf8_prefix_chars(lyric, 120)
     );
     if is_hex {
         match qrc_decrypt_hex(lyric) {
             Ok(plain) => {
                 eprintln!(
-                    "[lyric_qq] qrc decrypt ok chars={} preview={:?}",
+                    "[lyric_qq] qrc decrypt ok bytes={} preview={:?}",
                     plain.len(),
-                    &plain[..plain.len().min(200)]
+                    utf8_prefix_chars(&plain, 200)
                 );
                 if let Some(p) = qrc_plain_to_payload(&plain) {
                     if p.word_lines.is_some() {
@@ -367,9 +378,9 @@ fn payload_from_play_lyric_data(data: &Value) -> Result<LyricsPayload, String> {
     }
     let decoded = try_decode_lyric_content(lyric);
     eprintln!(
-        "[lyric_qq] decoded (non-hex) chars={} preview={:?}",
+        "[lyric_qq] decoded (non-hex) bytes={} preview={:?}",
         decoded.len(),
-        &decoded[..decoded.len().min(200)]
+        utf8_prefix_chars(&decoded, 200)
     );
     if let Some(p) = crate::lddc_parse::try_lddc_qq_lyrics_plain(&decoded) {
         eprintln!(
