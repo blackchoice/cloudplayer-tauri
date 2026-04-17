@@ -35,35 +35,86 @@
       <div class="body-row">
         <aside id="sidebar" class="sidebar"></aside>
         <div class="main-col">
-          <header class="top-search-row">
-            <div class="neon-search-wrap">
-              <div class="neon-search-inner">
-                <input
-                  id="global-search"
-                  type="search"
-                  class="global-search"
-                  placeholder="Search for tracks, artists, albums…"
-                  autocomplete="off"
-                />
-                <button type="button" id="btn-global-search" class="global-search-btn" title="搜索" aria-label="搜索">
-                  <svg
-                    class="global-search-btn__icon"
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="18"
-                    height="18"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    aria-hidden="true"
-                  >
-                    <circle cx="11" cy="11" r="8" />
-                    <path d="m21 21-4.3-4.3" />
-                  </svg>
-                </button>
+          <header class="top-search-row" role="banner">
+            <div class="top-search-row__search" data-tauri-drag-region="false">
+              <div class="neon-search-wrap">
+                <div class="neon-search-inner">
+                  <input
+                    id="global-search"
+                    type="search"
+                    class="global-search"
+                    placeholder="Search for tracks, artists, albums…"
+                    autocomplete="off"
+                  />
+                  <button type="button" id="btn-global-search" class="global-search-btn" title="搜索" aria-label="搜索">
+                    <svg
+                      class="global-search-btn__icon"
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="24"
+                      height="24"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.75"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      aria-hidden="true"
+                    >
+                      <circle cx="11" cy="11" r="8" />
+                      <path d="m21 21-4.3-4.3" />
+                    </svg>
+                  </button>
+                </div>
               </div>
+            </div>
+            <div class="top-search-row__drag" data-tauri-drag-region aria-hidden="true"></div>
+            <div class="window-titlebar__controls">
+              <button
+                type="button"
+                class="window-ctrl-btn"
+                id="win-btn-minimize"
+                data-tauri-drag-region="false"
+                title="最小化"
+                aria-label="最小化"
+              >
+                <span class="window-ctrl-btn__ico" aria-hidden="true">
+                  <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <line x1="3" y1="8" x2="13" y2="8" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                  </svg>
+                </span>
+              </button>
+              <button
+                type="button"
+                class="window-ctrl-btn"
+                id="win-btn-maximize"
+                data-tauri-drag-region="false"
+                title="最大化"
+                aria-label="最大化"
+              >
+                <span class="window-ctrl-btn__ico" aria-hidden="true">
+                  <svg class="win-max--normal" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <rect x="3" y="3" width="10" height="10" stroke="currentColor" stroke-width="2" />
+                  </svg>
+                  <svg class="win-max--restore" hidden viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <rect x="4.5" y="7.5" width="9" height="7" stroke="currentColor" stroke-width="2" />
+                    <rect x="2.5" y="2.5" width="9" height="7" stroke="currentColor" stroke-width="2" />
+                  </svg>
+                </span>
+              </button>
+              <button
+                type="button"
+                class="window-ctrl-btn window-ctrl-btn--close"
+                id="win-btn-close"
+                data-tauri-drag-region="false"
+                title="关闭"
+                aria-label="关闭"
+              >
+                <span class="window-ctrl-btn__ico" aria-hidden="true">
+                  <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M4 4l8 8M12 4L4 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                  </svg>
+                </span>
+              </button>
             </div>
           </header>
           <main id="stack" class="stack">
@@ -93,38 +144,83 @@
               </div>
             </section>
             <section class="page" data-page="playlist">
-              <div class="playlist-hero">
-                <img
-                  id="playlist-hero-cover"
-                  class="playlist-hero__cover"
-                  alt=""
-                  width="120"
-                  height="120"
-                  src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Crect fill='%23d1d5db' width='120' height='120' rx='12'/%3E%3C/svg%3E"
-                />
-                <div class="playlist-hero__meta">
-                  <h1 class="playlist-hero__title" id="playlist-page-title">歌单</h1>
-                  <div class="playlist-hero__sub" id="playlist-page-hint">CloudPlayer · 导入歌单</div>
-                  <div class="playlist-hero__count" id="playlist-track-count">共 0 首导入曲目</div>
-                  <div class="playlist-hero__actions">
-                    <button type="button" id="btn-playlist-play-all" class="btn-accent" disabled>▶ 播放全部</button>
-                    <button type="button" id="btn-playlist-back">← 返回</button>
+              <div id="playlist-view-normal" class="playlist-view-normal">
+                <div class="playlist-hero">
+                  <img
+                    id="playlist-hero-cover"
+                    class="playlist-hero__cover"
+                    alt=""
+                    width="120"
+                    height="120"
+                    src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Crect fill='%23d1d5db' width='120' height='120' rx='12'/%3E%3C/svg%3E"
+                  />
+                  <div class="playlist-hero__meta">
+                    <h1 class="playlist-hero__title" id="playlist-page-title">歌单</h1>
+                    <div class="playlist-hero__sub" id="playlist-page-hint">CloudPlayer · 导入歌单</div>
+                    <div class="playlist-hero__count" id="playlist-track-count">共 0 首导入曲目</div>
+                    <div class="playlist-hero__actions">
+                      <button type="button" id="btn-playlist-play-all" class="btn-accent" disabled>▶ 播放全部</button>
+                      <button type="button" id="btn-playlist-batch-open" class="btn-secondary" disabled>
+                        ⬇ 批量下载
+                      </button>
+                      <button type="button" id="btn-playlist-back">← 返回</button>
+                    </div>
                   </div>
                 </div>
+                <div class="table-wrap playlist-table-wrap">
+                  <table class="search-table playlist-table" id="playlist-detail-table">
+                    <thead>
+                      <tr>
+                        <th class="col-cover"></th>
+                        <th>标题</th>
+                        <th>专辑</th>
+                        <th class="col-like">喜欢</th>
+                        <th class="col-dur">时长</th>
+                      </tr>
+                    </thead>
+                    <tbody></tbody>
+                  </table>
+                </div>
               </div>
-              <div class="table-wrap playlist-table-wrap">
-                <table class="search-table playlist-table" id="playlist-detail-table">
-                  <thead>
-                    <tr>
-                      <th class="col-cover"></th>
-                      <th>标题</th>
-                      <th>专辑</th>
-                      <th class="col-like">喜欢</th>
-                      <th class="col-dur">时长</th>
-                    </tr>
-                  </thead>
-                  <tbody></tbody>
-                </table>
+              <div id="playlist-view-batch" class="playlist-view-batch" hidden>
+                <div class="playlist-batch-toolbar">
+                  <div class="playlist-batch-toolbar__left">
+                    <button type="button" id="btn-batch-download-run" class="btn-accent playlist-batch-dl-icon" title="加入下载队列">
+                      ⬇
+                    </button>
+                    <span class="playlist-batch-path-label">下载到：</span>
+                    <span id="playlist-batch-folder-display" class="playlist-batch-path muted">—</span>
+                    <button type="button" id="btn-batch-pick-folder" class="btn-link">更改目录</button>
+                  </div>
+                  <button type="button" id="btn-playlist-batch-exit" class="btn-secondary">退出批量下载</button>
+                </div>
+                <div class="playlist-batch-quality" role="radiogroup" aria-label="优先下载音质">
+                  <span class="playlist-batch-quality__label muted">优先下载</span>
+                  <label class="playlist-batch-radio"
+                    ><input type="radio" name="batch-dl-quality" value="128" checked /> 标准 128</label
+                  >
+                  <label class="playlist-batch-radio"
+                    ><input type="radio" name="batch-dl-quality" value="320" /> 高品质 320</label
+                  >
+                  <label class="playlist-batch-radio"
+                    ><input type="radio" name="batch-dl-quality" value="flac" /> FLAC</label
+                  >
+                </div>
+                <p id="playlist-batch-summary" class="playlist-batch-summary muted"></p>
+                <div class="table-wrap playlist-table-wrap playlist-batch-table-wrap">
+                  <table class="search-table playlist-table" id="playlist-batch-table">
+                    <thead>
+                      <tr>
+                        <th class="col-check"><input type="checkbox" id="playlist-batch-check-all" title="全选" /></th>
+                        <th class="col-cover"></th>
+                        <th>歌曲</th>
+                        <th>专辑</th>
+                        <th class="col-dur">时长</th>
+                      </tr>
+                    </thead>
+                    <tbody></tbody>
+                  </table>
+                </div>
               </div>
             </section>
             <section class="page" data-page="recent">
@@ -269,7 +365,7 @@
             <section class="page" data-page="settings" aria-label="偏好设置">
               <h1 class="page-title">偏好设置</h1>
               <p class="page-hint muted">
-                关闭主窗口行为、网易云 API 根地址（可选）与桌面歌词颜色将保存到本地配置。播放页歌词固定为 QQ → 酷狗 → 网易云 → LRCLIB（与「换」歌词替换同源）。
+                关闭主窗口行为、快捷键、网易云 API 根地址（可选）与桌面歌词颜色将保存到本地配置。播放页歌词固定为 QQ → 酷狗 → 网易云 → LRCLIB（与「换」歌词替换同源）。
               </p>
               <div class="settings-form">
                 <div class="settings-field">
@@ -294,6 +390,15 @@
                     <option value="tray">最小化到系统托盘</option>
                     <option value="quit">退出应用</option>
                   </select>
+                </div>
+                <div class="settings-field settings-field--checkbox">
+                  <label class="settings-checkbox-label">
+                    <input type="checkbox" id="setting-hotkey-ctrl-space-play-pause" checked />
+                    <span>启用 Ctrl+Space 播放/暂停</span>
+                  </label>
+                  <p class="settings-field-hint muted">
+                    主窗口在前台且焦点不在输入框内时生效；关闭后不再响应该快捷键。
+                  </p>
                 </div>
                 <div class="settings-field">
                   <span class="settings-field-label">桌面歌词字色</span>

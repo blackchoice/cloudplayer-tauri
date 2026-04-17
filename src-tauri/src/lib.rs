@@ -150,6 +150,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_settings,
+            commands::get_default_download_dir,
             commands::set_desktop_lyrics_click_through,
             commands::hide_main_window,
             commands::show_main_window,
@@ -172,6 +173,7 @@ pub fn run() {
             commands::replace_playlist_import_items,
             commands::append_playlist_import_items,
             commands::start_import_enrich,
+            commands::try_fill_playlist_item_source_id,
             commands::fetch_song_lrc,
             commands::fetch_song_lrc_enriched,
             commands::fetch_lrc_cx_cover,

@@ -3,6 +3,7 @@ identifier = "allow-main-app"
 description = "主窗口调用 CloudPlayer 全部业务命令（与 core:default 配合）"
 commands.allow = [
   "get_settings",
+  "get_default_download_dir",
   "save_settings",
   "hide_main_window",
   "show_main_window",
@@ -25,6 +26,7 @@ commands.allow = [
   "replace_playlist_import_items",
   "append_playlist_import_items",
   "start_import_enrich",
+  "try_fill_playlist_item_source_id",
   "fetch_song_lrc",
   "fetch_share_playlist",
   "list_local_songs",

@@ -30,6 +30,64 @@ body {
   min-height: 400px;
 }
 
+/* 与搜索框同一行右侧：最小化 / 最大化 / 关闭 */
+.window-titlebar__controls {
+  display: flex;
+  align-items: center;
+  align-self: stretch;
+  flex-shrink: 0;
+}
+
+.window-ctrl-btn {
+  width: 52px;
+  min-height: 40px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  line-height: 0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+/* 统一线宽（SVG stroke-width≈2）与光学居中，避免 Unicode 字形粗细与基线不一致 */
+.window-ctrl-btn__ico {
+  position: relative;
+  display: block;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+.window-ctrl-btn__ico > svg {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 18px;
+  height: 18px;
+  display: block;
+}
+
+/* 必须覆盖上一则 display:block，否则 [hidden] 无效，最大化/还原两枚 SVG 会叠在一起 */
+.window-ctrl-btn__ico > svg[hidden] {
+  display: none !important;
+}
+
+.window-ctrl-btn:hover {
+  background: transparent;
+  color: var(--accent);
+  box-shadow: none;
+}
+
+.window-ctrl-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  z-index: 1;
+}
+
 /* [hidden] 默认会被本文件的 display:flex 覆盖，导致移动端仍透出桌面壳 */
 .app-root[hidden],
 #app[hidden] {
@@ -196,15 +254,41 @@ body {
 }
 
 .top-search-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
   background: var(--bg-main);
-  padding: 8px 16px 8px 16px;
+  padding: 11px 0 11px 16px;
+  border-bottom: 1px solid var(--border);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.top-search-row__search {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 340px;
+  width: 100%;
+  user-select: auto;
+}
+
+.top-search-row__search .neon-search-wrap {
+  max-width: none;
+}
+
+.top-search-row__drag {
+  flex: 1;
+  min-width: 16px;
+  min-height: 36px;
+  align-self: stretch;
 }
 
 /* 对齐 Py 版 NeonSearchBar：白底 + 横向青→品红→金渐变描边（未聚焦略淡，聚焦更亮） */
 .neon-search-wrap {
   display: block;
   width: 100%;
-  max-width: 420px;
+  max-width: 340px;
   min-width: 200px;
   padding: 2px;
   border-radius: 9999px;
@@ -222,7 +306,7 @@ body {
   display: flex;
   align-items: stretch;
   width: 100%;
-  min-height: 36px;
+  min-height: 32px;
   border-radius: 9999px;
   overflow: hidden;
   background: #ffffff;
@@ -244,8 +328,8 @@ body {
   display: block;
   flex: 1;
   min-width: 0;
-  min-height: 36px;
-  padding: 8px 12px 8px 14px;
+  min-height: 32px;
+  padding: 6px 12px 6px 14px;
   border: none;
   border-radius: 0;
   background: transparent;
@@ -254,6 +338,8 @@ body {
   font-size: 10pt;
   outline: none;
   box-sizing: border-box;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .global-search-btn {
@@ -261,9 +347,10 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
-  margin: 3px 5px 3px 0;
+  /* 与内层 32px 高成比例：28px 按钮 + 上下各 2px 边距 */
+  width: 28px;
+  height: 28px;
+  margin: 2px 4px 2px 0;
   padding: 0;
   border: none;
   border-radius: 9999px;
@@ -274,6 +361,8 @@ body {
 
 .global-search-btn__icon {
   display: block;
+  width: 18px;
+  height: 18px;
 }
 
 .global-search-btn:hover {
@@ -577,6 +666,122 @@ body {
   background: var(--bg-card);
   font: inherit;
   cursor: pointer;
+}
+
+.btn-secondary {
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  font: inherit;
+  cursor: pointer;
+}
+
+.btn-link {
+  border: none;
+  background: none;
+  color: #15803d;
+  cursor: pointer;
+  font: inherit;
+  padding: 0 6px;
+  text-decoration: underline;
+}
+
+/* 与 app 内其它 [hidden] 一样：必须压过下方的 display:flex，否则批量下载区会一直显示在歌单下方 */
+#playlist-view-batch[hidden],
+.playlist-view-batch[hidden] {
+  display: none !important;
+}
+
+#playlist-view-normal[hidden] {
+  display: none !important;
+}
+
+.playlist-view-batch:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+}
+
+.playlist-batch-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.playlist-batch-toolbar__left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.playlist-batch-dl-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  padding: 0;
+  font-size: 18px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.playlist-batch-path {
+  max-width: min(520px, 55vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.playlist-batch-quality {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 16px;
+  padding: 8px 0;
+}
+
+.playlist-batch-quality__label {
+  font-weight: 600;
+}
+
+.playlist-batch-radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.playlist-batch-summary {
+  margin: 0;
+  font-size: 13px;
+}
+
+.playlist-batch-table-wrap {
+  flex: 1;
+  min-height: 200px;
+}
+
+.search-table .col-check {
+  width: 40px;
+  text-align: center;
+}
+
+.tag-no-id {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 0 6px;
+  font-size: 11px;
+  border-radius: 4px;
+  background: #fef3c7;
+  color: #92400e;
+  vertical-align: middle;
 }
 
 .playlist-table tbody tr {
@@ -1541,6 +1746,26 @@ body {
 
 .settings-field {
   margin-bottom: 16px;
+}
+
+.settings-field--checkbox .settings-field-hint {
+  margin-top: 6px;
+  margin-left: 0;
+}
+
+.settings-checkbox-label {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.settings-checkbox-label input {
+  margin-top: 2px;
+  flex-shrink: 0;
 }
 
 .settings-field-label {

@@ -98,6 +98,9 @@ pub struct Settings {
     /// 主窗口关闭：`ask` 每次询问，`quit` 退出，`tray` 最小化到托盘
     #[serde(default = "default_main_window_close_action")]
     pub main_window_close_action: String,
+    /// 主窗口聚焦时 `Ctrl+Space` 切换播放/暂停（不在输入框内触发）
+    #[serde(default = "default_hotkey_ctrl_space_play_pause")]
+    pub hotkey_ctrl_space_play_pause_enabled: bool,
     /// 桌面歌词未唱字色（#RRGGBB）
     #[serde(default = "default_desktop_lyrics_color_base")]
     pub desktop_lyrics_color_base: String,
@@ -130,6 +133,10 @@ fn default_main_window_close_action() -> String {
     "ask".to_string()
 }
 
+fn default_hotkey_ctrl_space_play_pause() -> bool {
+    true
+}
+
 fn default_desktop_lyrics_color_base() -> String {
     "#ffffff".to_string()
 }
@@ -159,6 +166,7 @@ impl Default for Settings {
             lyrics_netease_api_base: String::new(),
             lyrics_lrclib_enabled: default_lyrics_lrclib(),
             main_window_close_action: default_main_window_close_action(),
+            hotkey_ctrl_space_play_pause_enabled: default_hotkey_ctrl_space_play_pause(),
             desktop_lyrics_color_base: default_desktop_lyrics_color_base(),
             desktop_lyrics_color_highlight: default_desktop_lyrics_color_highlight(),
         }

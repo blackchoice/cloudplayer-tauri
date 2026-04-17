@@ -5,7 +5,7 @@ use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 #[cfg(desktop)]
 use tauri::Manager;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 use walkdir::WalkDir;
 
 use crate::import_enrich;
@@ -34,6 +34,14 @@ pub fn get_settings() -> Settings {
     Settings::load()
 }
 
+/// 未在设置中指定 `download_folder` 时，与下载落盘使用的默认目录一致（绝对路径）。
+#[tauri::command]
+pub fn get_default_download_dir() -> String {
+    crate::config::default_download_dir()
+        .to_string_lossy()
+        .into_owned()
+}
+
 #[derive(Debug, Deserialize)]
 pub struct SettingsPatch {
     pub volume: Option<f64>,
@@ -50,6 +58,7 @@ pub struct SettingsPatch {
     pub lyrics_netease_api_base: Option<String>,
     pub lyrics_lrclib_enabled: Option<bool>,
     pub main_window_close_action: Option<String>,
+    pub hotkey_ctrl_space_play_pause_enabled: Option<bool>,
     pub desktop_lyrics_color_base: Option<String>,
     pub desktop_lyrics_color_highlight: Option<String>,
 }
@@ -164,6 +173,9 @@ pub fn save_settings(patch: SettingsPatch) -> Result<(), String> {
         if t == "ask" || t == "quit" || t == "tray" {
             s.main_window_close_action = t;
         }
+    }
+    if let Some(v) = patch.hotkey_ctrl_space_play_pause_enabled {
+        s.hotkey_ctrl_space_play_pause_enabled = v;
     }
     if let Some(v) = patch.desktop_lyrics_color_base {
         let t = v.trim();
@@ -688,6 +700,52 @@ pub fn start_import_enrich(app: AppHandle, playlist_id: i64) -> Result<(), Strin
     }
     import_enrich::spawn_playlist_enrich(app, playlist_id);
     Ok(())
+}
+
+/// 为导入条目补全曲库 id（搜索首条）；成功写入后触发与导入富化相同的事件并后台继续富化歌单。
+#[tauri::command]
+pub async fn try_fill_playlist_item_source_id(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    db: State<'_, DbState>,
+    playlist_id: i64,
+    item_id: i64,
+) -> Result<Option<String>, String> {
+    if playlist_id <= 0 || item_id <= 0 {
+        return Err("无效的 id".to_string());
+    }
+    let empty_before = {
+        let conn = db.conn.lock().map_err(|e| e.to_string())?;
+        let s: String = conn
+            .query_row(
+                "SELECT IFNULL(pjmp3_source_id,'') FROM playlist_import_items WHERE id=?1 AND playlist_id=?2",
+                rusqlite::params![item_id, playlist_id],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+            .unwrap_or_default();
+        s.trim().is_empty()
+    };
+    let client = state.client.clone();
+    let out = import_enrich::try_resolve_import_row_source_id(
+        &app,
+        &client,
+        state.inner().as_ref(),
+        playlist_id,
+        item_id,
+    )
+    .await?;
+    let newly_filled =
+        empty_before && out.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false);
+    if newly_filled {
+        let _ = app.emit(
+            "import-enrich-item-done",
+            serde_json::json!({ "playlistId": playlist_id, "rowId": item_id }),
+        );
+        import_enrich::spawn_playlist_enrich(app.clone(), playlist_id);
+    }
+    Ok(out)
 }
 
 #[tauri::command]
