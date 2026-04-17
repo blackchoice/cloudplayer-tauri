@@ -182,6 +182,7 @@ pub fn run() {
             commands::fetch_share_playlist,
             commands::list_local_songs,
             commands::list_downloaded_songs,
+            commands::delete_downloaded_song,
             commands::scan_music_folder,
             commands::list_recent_plays,
             commands::record_recent_play,

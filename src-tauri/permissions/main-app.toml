@@ -31,6 +31,7 @@ commands.allow = [
   "fetch_share_playlist",
   "list_local_songs",
   "list_downloaded_songs",
+  "delete_downloaded_song",
   "scan_music_folder",
   "list_recent_plays",
   "record_recent_play",

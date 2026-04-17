@@ -660,17 +660,22 @@ pub fn append_playlist_import_items(
     playlist_id: i64,
     items: Vec<ImportItemIn>,
 ) -> Result<(), String> {
+    if playlist_id <= 0 {
+        return Err("无效的歌单 id".to_string());
+    }
+    if items.is_empty() {
+        return Ok(());
+    }
+    let shift: i64 = items.len() as i64;
     let mut conn = state.conn.lock().map_err(|e| e.to_string())?;
-    let pos0: i64 = conn
-        .query_row(
-            "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM playlist_import_items WHERE playlist_id=?1",
-            [playlist_id],
-            |r| r.get(0),
-        )
-        .map_err(|e| e.to_string())?;
-    let mut pos = pos0;
     let tx = conn.transaction().map_err(|e| e.to_string())?;
-    for t in &items {
+    // 新条目插到列表最前：先整体后移已有 sort_order，再插入 0..n-1（与桌面/手机「添加到歌单」一致）
+    tx.execute(
+        "UPDATE playlist_import_items SET sort_order = sort_order + ?1 WHERE playlist_id = ?2",
+        rusqlite::params![shift, playlist_id],
+    )
+    .map_err(|e| e.to_string())?;
+    for (i, t) in items.iter().enumerate() {
         tx.execute(
             r#"INSERT INTO playlist_import_items (
                 playlist_id, sort_order, title, artist, album, play_url, pjmp3_source_id,
@@ -678,14 +683,13 @@ pub fn append_playlist_import_items(
             ) VALUES (?1, ?2, ?3, ?4, ?5, '', '', '', '', 0, '')"#,
             rusqlite::params![
                 playlist_id,
-                pos,
+                i as i64,
                 t.title.trim(),
                 t.artist.trim(),
                 t.album.trim(),
             ],
         )
         .map_err(|e| e.to_string())?;
-        pos += 1;
     }
     tx.commit().map_err(|e| e.to_string())?;
     import_enrich::spawn_playlist_enrich(app, playlist_id);
@@ -877,10 +881,31 @@ pub fn list_local_songs(state: State<'_, DbState>) -> Result<Vec<LocalSongRow>, 
 }
 
 /// 「下载歌曲」Tab：库中已记录的本地下载文件（含重启后持久化）。
+/// 返回前先清理磁盘上已不存在的记录，与资源管理器手动删文件后的列表一致。
 #[tauri::command]
 pub fn list_downloaded_songs(state: State<'_, DbState>) -> Result<Vec<crate::db::DownloadedSongRow>, String> {
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let _ = crate::db::prune_downloaded_tracks_missing_files(&conn);
     crate::db::list_downloaded_tracks(&conn).map_err(|e| e.to_string())
+}
+
+/// 删除已下载音频文件，并移除库中对应记录。
+#[tauri::command]
+pub fn delete_downloaded_song(state: State<'_, DbState>, file_path: String) -> Result<(), String> {
+    let fp = file_path.trim();
+    if fp.is_empty() {
+        return Err("路径为空".to_string());
+    }
+    let p = PathBuf::from(fp);
+    if p.is_file() {
+        std::fs::remove_file(&p).map_err(|e| format!("删除文件失败: {}", e))?;
+    }
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let n = crate::db::delete_downloaded_track_by_path(&conn, fp).map_err(|e| e.to_string())?;
+    if n == 0 {
+        return Err("库中无此下载记录".to_string());
+    }
+    Ok(())
 }
 
 #[derive(Serialize)]

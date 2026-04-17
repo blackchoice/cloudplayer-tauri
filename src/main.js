@@ -1236,6 +1236,159 @@ function localLibraryRowToQueueItem(r) {
   };
 }
 
+/** 「下载歌曲」Tab 行 → 播放队列项 */
+function downloadedSongRowToQueueItem(r) {
+  const fp = String(r.file_path ?? r.filePath ?? "").trim();
+  return {
+    title: r.title || "",
+    artist: r.artist || "",
+    album: r.album || "",
+    local_path: fp,
+    cover_url: null,
+    source_id: String(r.pjmp3_source_id ?? r.pjmp3SourceId ?? "").trim() || undefined,
+  };
+}
+
+async function openDownloadedSongRowContextMenu(ev, rowIdx) {
+  ev.preventDefault();
+  const r = downloadedSongsRows[rowIdx];
+  if (!r) return;
+  const item = downloadedSongRowToQueueItem(r);
+  const pathOk = !!(item.local_path || "").trim();
+  const pls = await listPlaylistsCached();
+
+  const root = document.createElement("div");
+  root.appendChild(
+    cmBtn(
+      "播放",
+      () => {
+        if (!pathOk) {
+          alert("无有效本地文件路径。");
+          return;
+        }
+        playQueue = [item];
+        void playFromQueueIndex(0);
+        renderQueuePanel();
+      },
+      !pathOk
+    )
+  );
+  root.appendChild(
+    cmBtn(
+      "下一首播放",
+      () => {
+        if (!pathOk) {
+          alert("无有效本地文件路径，无法插播。");
+          return;
+        }
+        if (!playQueue.length) {
+          playQueue = [item];
+          void playFromQueueIndex(0);
+        } else {
+          playQueue.splice(playIndex + 1, 0, item);
+        }
+        renderQueuePanel();
+      },
+      !pathOk
+    )
+  );
+  root.appendChild(cmSep());
+
+  const addRow = document.createElement("div");
+  addRow.className = "ctx-menu__row--sub";
+  const fly = document.createElement("div");
+  fly.className = "ctx-menu__fly";
+  fly.textContent = "添加到";
+  const sub = document.createElement("div");
+  sub.className = "ctx-menu__subpanel";
+  sub.appendChild(
+    cmBtn("播放队列", () => {
+      if (!pathOk) {
+        alert("无有效本地文件路径。");
+        return;
+      }
+      playQueue.push(item);
+      renderQueuePanel();
+    })
+  );
+  sub.appendChild(
+    cmBtn("试听列表", () => {
+      if (!pathOk) {
+        alert("无有效本地文件路径。");
+        return;
+      }
+      playQueue.push(item);
+      renderQueuePanel();
+    })
+  );
+  sub.appendChild(cmSep());
+  sub.appendChild(
+    cmBtn("添加到新歌单", async () => {
+      const name = window.prompt("歌单名称（将写入 library.db）", "新歌单");
+      if (!name || !name.trim()) return;
+      const pid = await invoke("create_playlist", { name: name.trim() });
+      await invoke("append_playlist_import_items", {
+        playlistId: pid,
+        items: [{ title: r.title, artist: r.artist || "", album: r.album || "" }],
+      });
+      await refreshSidebarPlaylists();
+      await refreshPlaylistSelect();
+    })
+  );
+  sub.appendChild(cmSep());
+  let any = false;
+  for (const p of pls) {
+    const pid = p.id;
+    if (pid == null) continue;
+    any = true;
+    const name = (p.name || "").trim() || `#${pid}`;
+    sub.appendChild(
+      cmBtn(name, async () => {
+        await invoke("append_playlist_import_items", {
+          playlistId: pid,
+          items: [{ title: r.title, artist: r.artist || "", album: r.album || "" }],
+        });
+        await refreshSidebarPlaylists();
+      })
+    );
+  }
+  if (!any) sub.appendChild(cmBtn("（暂无歌单，请先新建）", () => {}, true));
+  addRow.appendChild(fly);
+  addRow.appendChild(sub);
+  root.appendChild(addRow);
+
+  root.appendChild(cmSep());
+  root.appendChild(
+    cmBtn("复制歌曲信息", () =>
+      copyImportTrackInfoToClipboard({
+        title: r.title,
+        artist: r.artist,
+        album: r.album,
+        sourceId: r.pjmp3_source_id ?? r.pjmp3SourceId,
+        coverUrl: null,
+        localPath: r.file_path ?? r.filePath,
+      })
+    )
+  );
+
+  root.appendChild(cmSep());
+  root.appendChild(
+    cmBtn("删除本地文件…", async () => {
+      const fp = String(r.file_path ?? r.filePath ?? "").trim();
+      if (!fp) return;
+      if (!window.confirm("将删除磁盘上的文件，并从「下载歌曲」列表中移除。确定？")) return;
+      try {
+        await invoke("delete_downloaded_song", { file_path: fp });
+        await refreshDownloadedSongsTable();
+      } catch (e) {
+        alertRequestFailed(e, "delete_downloaded_song");
+      }
+    })
+  );
+
+  mountContextMenuAt(ev.clientX, ev.clientY, root);
+}
+
 async function openLocalLibraryRowContextMenu(ev, rowIdx) {
   ev.preventDefault();
   const r = localLibraryRows[rowIdx];
@@ -2339,7 +2492,18 @@ function renderSidebar() {
   el.innerHTML = "";
   const logo = document.createElement("div");
   logo.className = "sidebar-logo";
-  logo.textContent = "CloudPlayer";
+  const logoImg = document.createElement("img");
+  logoImg.className = "sidebar-logo__mark";
+  logoImg.src = "/logo.svg";
+  logoImg.width = 28;
+  logoImg.height = 28;
+  logoImg.alt = "";
+  logoImg.setAttribute("aria-hidden", "true");
+  const logoText = document.createElement("span");
+  logoText.className = "sidebar-logo__text";
+  logoText.textContent = "CloudPlayer";
+  logo.appendChild(logoImg);
+  logo.appendChild(logoText);
   el.appendChild(logo);
   for (const item of NAV) {
     const btn = document.createElement("button");
@@ -2781,7 +2945,7 @@ async function refreshDownloadedSongsTable() {
       setTableMutedMessage(tbody, 4, "暂无记录。成功下载的歌曲会出现在这里（重启后仍会保留）。");
       return;
     }
-    downloadedSongsRows.forEach((r) => {
+    downloadedSongsRows.forEach((r, i) => {
       const tr = document.createElement("tr");
       const titleHtml = r.artist
         ? `<span class="t-title">${escapeHtml(r.title || "—")}</span><span class="t-art">${escapeHtml(r.artist)}</span>`
@@ -2790,6 +2954,7 @@ async function refreshDownloadedSongsTable() {
       const sz = formatFileSize(r.fileSize ?? r.file_size);
       const fp = String(r.filePath || r.file_path || "").trim();
       tr.title = fp || "";
+      tr.style.cursor = "pointer";
       tr.innerHTML = `<td>${titleHtml}</td><td class="muted">${escapeHtml(r.album || "—")}</td><td class="muted col-dur">${escapeHtml(dur)}</td><td class="muted col-size">${escapeHtml(sz)}</td>`;
       tr.addEventListener("dblclick", () => {
         if (!fp) return;
@@ -2797,6 +2962,7 @@ async function refreshDownloadedSongsTable() {
         void playFromQueueIndex(0);
         renderQueuePanel();
       });
+      tr.addEventListener("contextmenu", (ev) => void openDownloadedSongRowContextMenu(ev, i));
       tbody.appendChild(tr);
     });
   } catch (e) {

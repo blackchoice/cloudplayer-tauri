@@ -24,6 +24,7 @@ scraper = "0.21"
 regex = "1"
 url = "2"
 tokio = { version = "1", features = ["time", "sync", "macros", "rt-multi-thread"] }
+futures-util = { version = "0.3", default-features = false, features = ["std", "alloc"] }
 base64 = "0.22"
 image = "0.25"
 imageproc = "0.25"
@@ -46,7 +47,6 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls", "stream"] }
-futures-util = { version = "0.3", default-features = false, features = ["std", "alloc"] }
 
 [profile.release]
 panic = "abort" 

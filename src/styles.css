@@ -207,10 +207,21 @@ body {
 }
 
 .sidebar-logo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-weight: 700;
   font-size: 15px;
   padding: 8px 12px;
   color: var(--accent);
+}
+
+.sidebar-logo__mark {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  object-fit: contain;
+  border-radius: 6px;
 }
 
 .nav-item {
@@ -411,6 +422,40 @@ body {
 /* 发现页：仅表格区域滚动，底栏（播放全部 / 分页）固定在主内容区底部 */
 .page-active[data-page="discover"] {
   overflow: hidden;
+}
+
+.discover-welcome {
+  flex-shrink: 0;
+  margin-bottom: 12px;
+}
+
+.discover-welcome__inner {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px 18px;
+  border-left: 3px solid var(--accent);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+}
+
+.discover-welcome__title {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0 0 8px;
+  color: var(--text);
+}
+
+.discover-welcome__lead {
+  margin: 0 0 10px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+.discover-welcome__future {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .discover-scroll {
@@ -1737,6 +1782,67 @@ body {
 
 .btn-outline:hover {
   background: rgba(0, 0, 0, 0.04);
+}
+
+/* 偏好设置：中间区域可滚动，底部项目链接贴主内容区下沿固定 */
+.page-active[data-page="settings"] {
+  overflow: hidden;
+}
+
+.settings-page-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(100, 100, 110, 0.45) transparent;
+  padding-bottom: 4px;
+}
+
+.settings-page-body::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.settings-page-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.settings-page-body::-webkit-scrollbar-thumb {
+  background: rgba(100, 100, 110, 0.35);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.settings-page-body::-webkit-scrollbar-thumb:hover {
+  background: rgba(80, 80, 90, 0.5);
+  background-clip: padding-box;
+}
+
+.settings-repo-footer {
+  flex-shrink: 0;
+  margin-top: auto;
+  padding: 10px 0 2px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+
+.settings-repo-footer__link {
+  color: var(--accent);
+  text-decoration: none;
+  word-break: break-all;
+}
+
+.settings-repo-footer__link:hover {
+  text-decoration: underline;
+}
+
+.settings-repo-footer__link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
 }
 
 /* 偏好设置（与主内容区其它页面一致：灰边、白卡片、主题色强调） */

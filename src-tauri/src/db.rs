@@ -202,3 +202,24 @@ pub fn list_downloaded_tracks(conn: &Connection) -> rusqlite::Result<Vec<Downloa
     })?;
     rows.collect()
 }
+
+/// 按路径删除「下载歌曲」库记录（条数 0 或 1）。
+pub fn delete_downloaded_track_by_path(conn: &Connection, file_path: &str) -> rusqlite::Result<usize> {
+    conn.execute("DELETE FROM downloaded_tracks WHERE file_path = ?1", [file_path])
+}
+
+/// 移除磁盘上已不存在的下载记录（用户在资源管理器删除文件后，下次列表刷新会同步）。
+pub fn prune_downloaded_tracks_missing_files(conn: &Connection) -> rusqlite::Result<usize> {
+    use std::path::Path;
+    let paths: Vec<String> = conn
+        .prepare("SELECT file_path FROM downloaded_tracks")?
+        .query_map([], |r| r.get(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut total = 0usize;
+    for fp in paths {
+        if !Path::new(&fp).is_file() {
+            total += delete_downloaded_track_by_path(conn, &fp)?;
+        }
+    }
+    Ok(total)
+}
