@@ -493,7 +493,7 @@ dependencies = [
 
 [[package]]
 name = "cloudplayer-tauri"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "amll-lyric",
  "base64 0.22.1",
