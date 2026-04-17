@@ -2,7 +2,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager, State};
+#[cfg(desktop)]
+use tauri::Manager;
+use tauri::{AppHandle, State};
 use walkdir::WalkDir;
 
 use crate::import_enrich;
@@ -52,6 +54,7 @@ pub struct SettingsPatch {
 }
 
 /// 由主窗口调用：在原生层对「lyrics」窗设置鼠标穿透（不依赖子 Webview 的 ACL）。
+#[cfg(desktop)]
 #[tauri::command]
 pub fn set_desktop_lyrics_click_through(app: AppHandle, ignore_cursor_events: bool) -> Result<(), String> {
     let Some(w) = app.get_webview_window("lyrics") else {
@@ -61,7 +64,14 @@ pub fn set_desktop_lyrics_click_through(app: AppHandle, ignore_cursor_events: bo
         .map_err(|e| e.to_string())
 }
 
+#[cfg(not(desktop))]
+#[tauri::command]
+pub fn set_desktop_lyrics_click_through(_app: AppHandle, _ignore_cursor_events: bool) -> Result<(), String> {
+    Ok(())
+}
+
 /// 关闭到托盘：隐藏主窗口。
+#[cfg(desktop)]
 #[tauri::command]
 pub fn hide_main_window(app: AppHandle) -> Result<(), String> {
     let Some(w) = app.get_webview_window("main") else {
@@ -70,7 +80,14 @@ pub fn hide_main_window(app: AppHandle) -> Result<(), String> {
     w.hide().map_err(|e| e.to_string())
 }
 
+#[cfg(not(desktop))]
+#[tauri::command]
+pub fn hide_main_window(_app: AppHandle) -> Result<(), String> {
+    Ok(())
+}
+
 /// 从托盘恢复主窗口。
+#[cfg(desktop)]
 #[tauri::command]
 pub fn show_main_window(app: AppHandle) -> Result<(), String> {
     let Some(w) = app.get_webview_window("main") else {
@@ -78,6 +95,12 @@ pub fn show_main_window(app: AppHandle) -> Result<(), String> {
     };
     w.show().map_err(|e| e.to_string())?;
     w.set_focus().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[cfg(not(desktop))]
+#[tauri::command]
+pub fn show_main_window(_app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
@@ -329,6 +352,49 @@ pub fn list_playlists(state: State<'_, DbState>) -> Result<Vec<PlaylistRow>, Str
             Ok(PlaylistRow {
                 id: r.get(0)?,
                 name: r.get(1)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row.map_err(|e| e.to_string())?);
+    }
+    Ok(out)
+}
+
+/// 歌单列表（含导入曲目数量、封面），供移动端「我的歌单」展示。
+#[derive(Serialize)]
+pub struct PlaylistSummaryRow {
+    pub id: i64,
+    pub name: String,
+    pub track_count: i64,
+    /// 首条非空 `cover_url`（按 `sort_order`），与歌单详情页头图一致。
+    #[serde(default)]
+    pub cover_url: String,
+}
+
+#[tauri::command]
+pub fn list_playlists_summary(state: State<'_, DbState>) -> Result<Vec<PlaylistSummaryRow>, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT p.id, p.name, COUNT(i.id) AS cnt, \
+             COALESCE((SELECT TRIM(COALESCE(i2.cover_url, '')) FROM playlist_import_items i2 \
+              WHERE i2.playlist_id = p.id AND LENGTH(TRIM(COALESCE(i2.cover_url, ''))) > 0 \
+              ORDER BY i2.sort_order ASC, i2.id ASC LIMIT 1), '') AS cover_url \
+             FROM playlists p \
+             LEFT JOIN playlist_import_items i ON i.playlist_id = p.id \
+             GROUP BY p.id \
+             ORDER BY p.name COLLATE NOCASE",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(PlaylistSummaryRow {
+                id: r.get(0)?,
+                name: r.get(1)?,
+                track_count: r.get(2)?,
+                cover_url: r.get::<_, Option<String>>(3)?.unwrap_or_default(),
             })
         })
         .map_err(|e| e.to_string())?;
@@ -663,6 +729,13 @@ pub fn list_local_songs(state: State<'_, DbState>) -> Result<Vec<LocalSongRow>, 
         out.push(row.map_err(|e| e.to_string())?);
     }
     Ok(out)
+}
+
+/// 「下载歌曲」Tab：库中已记录的本地下载文件（含重启后持久化）。
+#[tauri::command]
+pub fn list_downloaded_songs(state: State<'_, DbState>) -> Result<Vec<crate::db::DownloadedSongRow>, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    crate::db::list_downloaded_tracks(&conn).map_err(|e| e.to_string())
 }
 
 #[derive(Serialize)]

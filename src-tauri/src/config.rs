@@ -1,19 +1,57 @@
 //! 与 Python `config/settings.py` 对齐：`~/.cloudplayer/settings.json`
+//!
+//! **Android** 必须在 `setup` 里先调用 [`init_android_storage`]，再打开数据库（见 `lib.rs`）。
 
 /// 与 `cloudplayer/config/settings.py` 中 `BASE_URL` 一致。
 pub const BASE_URL: &str = "https://pjmp3.com";
 
 use std::fs;
 use std::path::PathBuf;
+#[cfg(target_os = "android")]
+use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
-pub fn config_dir() -> PathBuf {
-    let base = dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
+#[cfg(target_os = "android")]
+static ANDROID_CONFIG_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+/// Android：使用 Tauri 提供的应用沙箱数据目录，避免 `dirs::home_dir` 路径无效导致启动闪退。
+#[cfg(target_os = "android")]
+pub fn init_android_storage<R: tauri::Runtime>(app: &tauri::App<R>) -> Result<(), String> {
+    use tauri::Manager;
+    let base = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("应用数据目录: {e}"))?
         .join(".cloudplayer");
-    let _ = fs::create_dir_all(&base);
-    base
+    fs::create_dir_all(&base).map_err(|e| format!("创建配置目录: {e}"))?;
+    ANDROID_CONFIG_DIR
+        .set(base)
+        .map_err(|_| "init_android_storage 重复调用".to_string())?;
+    Ok(())
+}
+
+pub fn config_dir() -> PathBuf {
+    #[cfg(target_os = "android")]
+    {
+        if let Some(p) = ANDROID_CONFIG_DIR.get() {
+            return p.clone();
+        }
+        let base = dirs::data_local_dir()
+            .or_else(dirs::data_dir)
+            .unwrap_or_else(std::env::temp_dir)
+            .join(".cloudplayer");
+        let _ = fs::create_dir_all(&base);
+        return base;
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let base = dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".cloudplayer");
+        let _ = fs::create_dir_all(&base);
+        base
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -128,10 +166,18 @@ impl Default for Settings {
 }
 
 pub fn default_download_dir() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("Music")
-        .join("CloudPlayer")
+    #[cfg(target_os = "android")]
+    {
+        // 应用私有目录，避免分区存储下写外置存储失败
+        config_dir().join("Music").join("CloudPlayer")
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("Music")
+            .join("CloudPlayer")
+    }
 }
 
 impl Settings {

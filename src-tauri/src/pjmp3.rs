@@ -1,9 +1,22 @@
 //! pjmp3.com 搜索与试听解析，行为对齐 Python `services/search_service.py`。
 
 use std::collections::HashSet;
+use std::error::Error;
 use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
+
+/// reqwest 的 `Display` 往往只有「error sending request」；把 `source()` 链拼上便于 Android logcat 区分 DNS/TLS/超时。
+fn reqwest_err_chain(e: reqwest::Error) -> String {
+    let mut s = e.to_string();
+    let mut src: Option<&(dyn Error + 'static)> = e.source();
+    while let Some(err) = src {
+        s.push_str(": ");
+        s.push_str(&err.to_string());
+        src = err.source();
+    }
+    s
+}
 
 use regex::Regex;
 use scraper::{ElementRef, Html, Selector};
@@ -333,12 +346,12 @@ pub async fn search_pjmp3(
         .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
         .send()
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(reqwest_err_chain)?
         .error_for_status()
-        .map_err(|e| e.to_string())?
+        .map_err(reqwest_err_chain)?
         .text()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(reqwest_err_chain)?;
 
     parse_search_html_page(&body, page)
 }
@@ -388,12 +401,12 @@ pub async fn fetch_song_page_html(client: &reqwest::Client, song_id: &str) -> Re
         .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
         .send()
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(reqwest_err_chain)?
         .error_for_status()
-        .map_err(|e| e.to_string())?
+        .map_err(reqwest_err_chain)?
         .text()
         .await
-        .map_err(|e| e.to_string())
+        .map_err(reqwest_err_chain)
 }
 
 fn normalize_media_url(raw: &str) -> String {
@@ -556,7 +569,7 @@ async fn download_mp3_bytes(
         let resp = match req.send().await {
             Ok(r) => r,
             Err(e) => {
-                last_err = e.to_string();
+                last_err = reqwest_err_chain(e);
                 continue;
             }
         };
@@ -573,7 +586,7 @@ async fn download_mp3_bytes(
         let bytes = match resp.bytes().await {
             Ok(b) => b,
             Err(e) => {
-                last_err = e.to_string();
+                last_err = reqwest_err_chain(e);
                 continue;
             }
         };
@@ -698,7 +711,7 @@ async fn download_text_with_song_referer(
         let resp = match req.send().await {
             Ok(r) => r,
             Err(e) => {
-                last_err = e.to_string();
+                last_err = reqwest_err_chain(e);
                 continue;
             }
         };
@@ -709,7 +722,7 @@ async fn download_text_with_song_referer(
         let bytes = match resp.bytes().await {
             Ok(b) => b,
             Err(e) => {
-                last_err = e.to_string();
+                last_err = reqwest_err_chain(e);
                 continue;
             }
         };

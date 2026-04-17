@@ -1,3 +1,9 @@
+import "./styles.css";
+import {
+  buildImportCsvBlobUtf8,
+  buildImportTxtBlob,
+  triggerBlobDownload,
+} from "./export-playlist.js";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { emitTo, listen } from "@tauri-apps/api/event";
@@ -98,6 +104,8 @@ let sessionRecentPlays = [];
 const downloadTasksBySourceId = new Map();
 /** 本地曲库列表行缓存（双击播放） @type {any[]} */
 let localLibraryRows = [];
+/** 「下载歌曲」Tab：`list_downloaded_songs` 结果缓存（双击播放） @type {any[]} */
+let downloadedSongsRows = [];
 let lastLibraryFolder = "";
 
 function loadLikedSet() {
@@ -397,6 +405,10 @@ async function openLyricsReplaceModal() {
   if (inp) inp.value = kw;
   setLyricsReplaceError("");
   lyricsReplacePreviewPayload = null;
+  lyricsReplaceCandidates = [];
+  lyricsReplaceSelectedIndex = -1;
+  const tbody = document.getElementById("lyrics-replace-tbody");
+  if (tbody) setTableMutedMessage(tbody, 4, "输入关键词后点击「搜索」");
   const applyBtn = document.getElementById("lyrics-replace-apply");
   if (applyBtn) applyBtn.disabled = true;
   const prev = document.getElementById("lyrics-replace-preview");
@@ -412,54 +424,59 @@ async function openLyricsReplaceModal() {
   } catch (e) {
     console.warn("get_settings for lyrics replace", e);
   }
-  void searchLyricsReplaceCandidates();
 }
 
 async function searchLyricsReplaceCandidates() {
-  lyricsReplaceFetchGen += 1;
-  const inp = document.getElementById("lyrics-replace-keyword");
-  const keyword = (inp?.value || "").trim();
-  const tbody = document.getElementById("lyrics-replace-tbody");
-  const applyBtn = document.getElementById("lyrics-replace-apply");
-  if (applyBtn) applyBtn.disabled = true;
-  lyricsReplacePreviewPayload = null;
-  const prev = document.getElementById("lyrics-replace-preview");
-  if (prev) prev.textContent = "";
-  setLyricsReplaceError("");
-  lyricsReplaceSelectedIndex = -1;
-  if (!keyword) {
-    setTableMutedMessage(tbody, 4, "请输入关键词");
-    return;
-  }
-  const sources = getLyricsReplaceSourcesFromChips();
-  if (!sources.length) {
-    setTableMutedMessage(tbody, 4, "请至少选择一个来源");
-    return;
-  }
-  const a = audioEl();
-  const durationMs =
-    a && a.duration && isFinite(a.duration) && a.duration > 0
-      ? Math.round(a.duration * 1000)
-      : null;
-  setTableMutedMessage(tbody, 4, "搜索中…");
+  const searchBtn = document.getElementById("lyrics-replace-search-btn");
+  if (searchBtn) searchBtn.disabled = true;
   try {
-    lyricsReplaceCandidates = await invoke("lyrics_search_candidates", {
-      keyword,
-      durationMs,
-      sources,
-    });
-  } catch (e) {
-    console.warn("lyrics_search_candidates", e);
-    setTableMutedMessage(tbody, 4, MSG_REQUEST_FAILED);
-    setLyricsReplaceError(String(e));
-    return;
-  }
-  renderLyricsReplaceTable();
-  if (lyricsReplaceCandidates.length > 0) {
-    await selectLyricsReplaceRow(0);
-  } else {
-    setTableMutedMessage(tbody, 4, "未找到结果");
-    if (prev) prev.textContent = "未找到匹配歌词，请换关键词或来源。";
+    lyricsReplaceFetchGen += 1;
+    const inp = document.getElementById("lyrics-replace-keyword");
+    const keyword = (inp?.value || "").trim();
+    const tbody = document.getElementById("lyrics-replace-tbody");
+    const applyBtn = document.getElementById("lyrics-replace-apply");
+    if (applyBtn) applyBtn.disabled = true;
+    lyricsReplacePreviewPayload = null;
+    const prev = document.getElementById("lyrics-replace-preview");
+    if (prev) prev.textContent = "";
+    setLyricsReplaceError("");
+    lyricsReplaceSelectedIndex = -1;
+    if (!keyword) {
+      setTableMutedMessage(tbody, 4, "请输入关键词");
+      return;
+    }
+    const sources = getLyricsReplaceSourcesFromChips();
+    if (!sources.length) {
+      setTableMutedMessage(tbody, 4, "请至少选择一个来源");
+      return;
+    }
+    const a = audioEl();
+    const durationMs =
+      a && a.duration && isFinite(a.duration) && a.duration > 0
+        ? Math.round(a.duration * 1000)
+        : null;
+    setTableMutedMessage(tbody, 4, "搜索中…");
+    try {
+      lyricsReplaceCandidates = await invoke("lyrics_search_candidates", {
+        keyword,
+        durationMs,
+        sources,
+      });
+    } catch (e) {
+      console.warn("lyrics_search_candidates", e);
+      setTableMutedMessage(tbody, 4, MSG_REQUEST_FAILED);
+      setLyricsReplaceError(String(e));
+      return;
+    }
+    renderLyricsReplaceTable();
+    if (lyricsReplaceCandidates.length > 0) {
+      await selectLyricsReplaceRow(0);
+    } else {
+      setTableMutedMessage(tbody, 4, "未找到结果");
+      if (prev) prev.textContent = "未找到匹配歌词，请换关键词或来源。";
+    }
+  } finally {
+    if (searchBtn) searchBtn.disabled = false;
   }
 }
 
@@ -868,10 +885,12 @@ async function enqueueDownloadForTrack(track, quality) {
   }
   try {
     await invoke("enqueue_download", {
-      source_id: sid,
-      title: track.title || "",
-      artist: track.artist || "",
-      quality,
+      job: {
+        source_id: sid,
+        title: track.title || "",
+        artist: track.artist || "",
+        quality,
+      },
     });
   } catch (e) {
     alertRequestFailed(e, "enqueue_download");
@@ -1994,14 +2013,6 @@ function renderImportTable() {
   if (mergeBtn) mergeBtn.disabled = !has || !nOpt;
 }
 
-function downloadBlob(filename, text, mime) {
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(new Blob([text], { type: mime }));
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(a.href);
-}
-
 function wireImportPage() {
   document.getElementById("btn-import-parse")?.addEventListener("click", async () => {
     const raw = document.getElementById("import-text")?.value?.trim() ?? "";
@@ -2023,19 +2034,12 @@ function wireImportPage() {
 
   document.getElementById("btn-import-export-txt")?.addEventListener("click", () => {
     if (!importTracks.length) return;
-    const body = importTracks.map((t) => (t.artist ? `${t.title} - ${t.artist}` : t.title)).join("\n");
-    downloadBlob("playlist.txt", body, "text/plain;charset=utf-8");
+    triggerBlobDownload("playlist.txt", buildImportTxtBlob(importTracks));
   });
 
   document.getElementById("btn-import-export-csv")?.addEventListener("click", () => {
     if (!importTracks.length) return;
-    const lines = ["title,artist,album"].concat(
-      importTracks.map((t) => {
-        const esc = (s) => `"${String(s).replace(/"/g, '""')}"`;
-        return [esc(t.title), esc(t.artist), esc(t.album || "")].join(",");
-      })
-    );
-    downloadBlob("playlist.csv", lines.join("\n"), "text/csv;charset=utf-8");
+    triggerBlobDownload("playlist.csv", buildImportCsvBlobUtf8(importTracks));
   });
 
   document.getElementById("btn-import-save-new")?.addEventListener("click", async () => {
@@ -2141,6 +2145,14 @@ function formatDurationMs(ms) {
   return formatTime(n / 1000);
 }
 
+function formatFileSize(bytes) {
+  const n = Number(bytes);
+  if (!Number.isFinite(n) || n < 0) return "—";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 function renderSidebar() {
   const el = document.getElementById("sidebar");
   el.innerHTML = "";
@@ -2223,9 +2235,10 @@ function setPage(pageId) {
   }
   if (pageId === "download") {
     const activeTab = document.querySelector("[data-download-tab].page-tab--active");
-    const tid = activeTab?.getAttribute("data-download-tab");
+    const tid = activeTab?.getAttribute("data-download-tab") || "local";
     if (tid === "local") void refreshLocalLibraryTable();
-    if (tid === "dl") renderDownloadQueueTable();
+    if (tid === "saved") void refreshDownloadedSongsTable();
+    if (tid === "active") renderDownloadActiveTable();
   }
   if (pageId === "import") {
     void refreshPlaylistSelect();
@@ -2536,28 +2549,79 @@ async function loadRecentPlaysFromDb() {
   }
 }
 
-function renderDownloadQueueTable() {
-  const tbody = document.querySelector("#download-queue-table tbody");
+/** 右侧「正在下载」：排队中、进行中、失败 */
+function renderDownloadActiveTable() {
+  const tbody = document.querySelector("#download-active-table tbody");
   if (!tbody) return;
-  const list = [...downloadTasksBySourceId.values()];
+  const list = [...downloadTasksBySourceId.values()].filter((t) => {
+    const st = t.status || "";
+    return st === "queued" || st === "downloading" || st === "failed";
+  });
   if (!list.length) {
-    setTableMutedMessage(tbody, 4, "队列为空。在「发现」或歌单右键选择「下载」。");
+    setTableMutedMessage(tbody, 4, "当前没有进行中的下载。在「发现」或歌单右键选择「下载」。");
     return;
   }
   tbody.innerHTML = "";
   for (const t of list) {
     const tr = document.createElement("tr");
     const pct = Math.round((t.progress ?? 0) * 100);
-    const st = t.status || "";
-    const rawMsg = (t.message && String(t.message)) || "";
-    const msg =
-      st === "failed" && rawMsg ? MSG_REQUEST_FAILED : rawMsg;
     const tit = t.title || "";
     const art = t.artist || "";
     const qu = t.quality || "";
+    const st = t.status || "";
+    const rawMsg = (t.message && String(t.message)) || "";
+    if (st === "failed" && rawMsg) {
+      const sid = t.sourceId ?? t.source_id;
+      console.error("[download] failed", { sourceId: sid, title: tit, message: rawMsg });
+    }
+    const msg = st === "failed" && rawMsg ? `${MSG_REQUEST_FAILED}（见日志文件）` : rawMsg;
+    tr.title = st === "failed" && rawMsg ? rawMsg : "";
     tr.innerHTML = `<td>${escapeHtml(st)}</td><td>${escapeHtml(`${tit} — ${art}`)}</td><td>${escapeHtml(qu)}</td><td>${escapeHtml(String(pct))}%${msg ? ` · ${escapeHtml(msg)}` : ""}</td>`;
     tbody.appendChild(tr);
   }
+}
+
+/** 「下载歌曲」：库中持久化的已下载文件（与内存队列无关） */
+async function refreshDownloadedSongsTable() {
+  const tbody = document.querySelector("#download-completed-table tbody");
+  if (!tbody) return;
+  setTableMutedMessage(tbody, 4, "加载中…");
+  try {
+    const rows = await invoke("list_downloaded_songs");
+    downloadedSongsRows = Array.isArray(rows) ? rows : [];
+    tbody.innerHTML = "";
+    if (!downloadedSongsRows.length) {
+      setTableMutedMessage(tbody, 4, "暂无记录。成功下载的歌曲会出现在这里（重启后仍会保留）。");
+      return;
+    }
+    downloadedSongsRows.forEach((r) => {
+      const tr = document.createElement("tr");
+      const titleHtml = r.artist
+        ? `<span class="t-title">${escapeHtml(r.title || "—")}</span><span class="t-art">${escapeHtml(r.artist)}</span>`
+        : `<span class="t-title">${escapeHtml(r.title || "—")}</span>`;
+      const dur = formatDurationMs(r.durationMs ?? r.duration_ms);
+      const sz = formatFileSize(r.fileSize ?? r.file_size);
+      const fp = String(r.filePath || r.file_path || "").trim();
+      tr.title = fp || "";
+      tr.innerHTML = `<td>${titleHtml}</td><td class="muted">${escapeHtml(r.album || "—")}</td><td class="muted col-dur">${escapeHtml(dur)}</td><td class="muted col-size">${escapeHtml(sz)}</td>`;
+      tr.addEventListener("dblclick", () => {
+        if (!fp) return;
+        playQueue = [{ title: r.title, artist: r.artist || "", local_path: fp, cover_url: null }];
+        void playFromQueueIndex(0);
+        renderQueuePanel();
+      });
+      tbody.appendChild(tr);
+    });
+  } catch (e) {
+    warnRequestFailed(e, "list_downloaded_songs");
+    setTableMutedMessage(tbody, 4, MSG_REQUEST_FAILED);
+    downloadedSongsRows = [];
+  }
+}
+
+function renderDownloadTables() {
+  renderDownloadActiveTable();
+  void refreshDownloadedSongsTable();
 }
 
 function updateDownloadFolderHint(path) {
@@ -2648,7 +2712,8 @@ function wireDownloadPage() {
         p.classList.toggle("page-tab-panel--active", show);
       });
       if (id === "local") void refreshLocalLibraryTable();
-      if (id === "dl") renderDownloadQueueTable();
+      if (id === "saved") void refreshDownloadedSongsTable();
+      if (id === "active") renderDownloadActiveTable();
     });
   });
 
@@ -3048,7 +3113,7 @@ function wireVolume() {
   vol.addEventListener("change", persist);
 }
 
-document.addEventListener("DOMContentLoaded", () => {
+function bootDesktop() {
   renderSidebar();
   setPage("discover");
   wireQueueToggle();
@@ -3094,7 +3159,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (sid != null && String(sid) !== "") {
       downloadTasksBySourceId.set(String(sid), p);
     }
-    renderDownloadQueueTable();
+    renderDownloadTables();
   });
   listen("desktop-lyrics-request-lock", async (e) => {
     const locked = e?.payload?.locked;
@@ -3130,4 +3195,12 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   void loadRecentPlaysFromDb();
   loadSettings();
-});
+}
+
+export function startDesktop() {
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", bootDesktop);
+  } else {
+    bootDesktop();
+  }
+}
