@@ -3,6 +3,9 @@ identifier = "allow-main-app"
 description = "主窗口调用 CloudPlayer 全部业务命令（与 core:default 配合）"
 commands.allow = [
   "get_settings",
+  "get_global_hotkeys",
+  "apply_global_hotkeys",
+  "validate_accelerator",
   "get_default_download_dir",
   "save_settings",
   "hide_main_window",

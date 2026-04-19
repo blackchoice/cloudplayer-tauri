@@ -28,9 +28,6 @@ const searchState = {
 /** 已下载曲库 id（与 `downloaded_tracks.pjmp3_source_id` 一致），用于发现/歌单表格 */
 let downloadedSourceIds = new Set();
 
-/** 与设置「启用 Ctrl+Space 播放/暂停」同步；未打开设置页时仍依此值 */
-let hotkeyCtrlSpacePlayPauseEnabled = true;
-
 /** @type {Array<{ source_id?: string, title: string, artist: string, album?: string, cover_url?: string | null, local_path?: string, import_playlist_id?: number | null, import_item_id?: number | null }>} */
 let playQueue = [];
 let playIndex = 0;
@@ -249,7 +246,7 @@ let settingsFormBaseline = {
   base: "#ffffff",
   highlight: "#ffb7d4",
   neteaseApiBase: "",
-  ctrlSpacePlayPause: true,
+  hotkeysSig: "",
 };
 
 function normalizeLyricHexInput(x, def) {
@@ -261,18 +258,296 @@ function normalizeNeteaseApiBase(raw) {
   return String(raw ?? "").trim();
 }
 
+function getGlobalHotkeysPayloadFromDom() {
+  const en = document.getElementById("setting-hotkeys-enabled");
+  return {
+    play_pause: (document.getElementById("hk-play-pause")?.dataset.accel || "").trim(),
+    prev: (document.getElementById("hk-prev")?.dataset.accel || "").trim(),
+    next: (document.getElementById("hk-next")?.dataset.accel || "").trim(),
+    volume_up: (document.getElementById("hk-vol-up")?.dataset.accel || "").trim(),
+    volume_down: (document.getElementById("hk-vol-down")?.dataset.accel || "").trim(),
+    enabled: !!en?.checked,
+  };
+}
+
+function codeToHotkeyMainKey(code) {
+  if (!code) return null;
+  if (code.startsWith("Key") && code.length === 4) return code.slice(3).toLowerCase();
+  if (code.startsWith("Digit")) return code.slice(5);
+  const map = {
+    Space: "space",
+    ArrowLeft: "left",
+    ArrowRight: "right",
+    ArrowUp: "up",
+    ArrowDown: "down",
+    Backquote: "`",
+    Minus: "-",
+    Equal: "=",
+    BracketLeft: "[",
+    BracketRight: "]",
+    Backslash: "\\",
+    Semicolon: ";",
+    Quote: "'",
+    Comma: ",",
+    Period: ".",
+    Slash: "/",
+    Escape: "escape",
+    Tab: "tab",
+    Enter: "enter",
+    Backspace: "backspace",
+    Delete: "delete",
+    Insert: "insert",
+    Home: "home",
+    End: "end",
+    PageUp: "pageup",
+    PageDown: "pagedown",
+    NumpadAdd: "numpadadd",
+    NumpadSubtract: "numsubtract",
+    NumpadMultiply: "nummultiply",
+    NumpadDivide: "numdivide",
+    NumpadDecimal: "numdecimal",
+    NumpadEnter: "numpadenter",
+  };
+  if (map[code]) return map[code];
+  if (code.startsWith("Numpad")) {
+    const rest = code.slice(6);
+    if (rest >= "0" && rest <= "9") return `num${rest}`;
+  }
+  if (code.startsWith("F") && /^F\d+$/.test(code)) return code.toLowerCase();
+  return null;
+}
+
+/** @param {KeyboardEvent} ev */
+function accelFromKeyboardEvent(ev) {
+  const key = codeToHotkeyMainKey(ev.code);
+  if (!key || key === "escape") return null;
+  const mods = [];
+  if (ev.shiftKey) mods.push("shift");
+  if (ev.ctrlKey) mods.push("control");
+  if (ev.altKey) mods.push("alt");
+  if (ev.metaKey) mods.push("super");
+  if (mods.length === 0 && key === "backspace") return "__clear__";
+  if (mods.length === 0) return null;
+  mods.push(key);
+  return mods.join("+");
+}
+
+function formatAccelDisplay(s) {
+  if (!s || !String(s).trim()) return "未设置";
+  return String(s)
+    .split("+")
+    .map((raw) => {
+      const t = raw.trim().toLowerCase();
+      if (t === "control" || t === "ctrl") return "Ctrl";
+      if (t === "alt") return "Alt";
+      if (t === "shift") return "Shift";
+      if (t === "super" || t === "command" || t === "cmd") return "Meta";
+      if (t === "left") return "Left";
+      if (t === "right") return "Right";
+      if (t === "up") return "Up";
+      if (t === "down") return "Down";
+      if (t === "space") return "Space";
+      if (t.length === 1) return raw.trim().toUpperCase();
+      return raw.trim().length ? raw.trim().charAt(0).toUpperCase() + raw.slice(1).toLowerCase() : "";
+    })
+    .filter(Boolean)
+    .join(" + ");
+}
+
+function syncHotkeyButtonUi(btn) {
+  const a = (btn.dataset.accel || "").trim();
+  btn.textContent = a ? formatAccelDisplay(a) : "未设置";
+  btn.classList.toggle("hotkeys-input--empty", !a);
+}
+
+/** @type {HTMLButtonElement | null} */
+let hotkeyCaptureButton = null;
+let hotkeyCapturePrevAccel = "";
+
+function stopHotkeyCapture(restore) {
+  if (!hotkeyCaptureButton) return;
+  const btn = hotkeyCaptureButton;
+  hotkeyCaptureButton = null;
+  btn.classList.remove("hotkeys-input--capturing");
+  document.removeEventListener("keydown", onHotkeyCaptureKeydown, true);
+  if (restore) {
+    btn.dataset.accel = hotkeyCapturePrevAccel;
+    syncHotkeyButtonUi(btn);
+  }
+  hotkeyCapturePrevAccel = "";
+}
+
+/** @param {KeyboardEvent} ev */
+function onHotkeyCaptureKeydown(ev) {
+  if (!hotkeyCaptureButton) return;
+  if (ev.key === "Escape") {
+    ev.preventDefault();
+    stopHotkeyCapture(true);
+    updateSettingsSaveButtonState();
+    return;
+  }
+  const raw = accelFromKeyboardEvent(ev);
+  if (!raw) {
+    ev.preventDefault();
+    return;
+  }
+  if (raw === "__clear__") {
+    ev.preventDefault();
+    hotkeyCaptureButton.dataset.accel = "";
+    syncHotkeyButtonUi(hotkeyCaptureButton);
+    stopHotkeyCapture(false);
+    updateSettingsSaveButtonState();
+    return;
+  }
+  ev.preventDefault();
+  ev.stopPropagation();
+  void (async () => {
+    try {
+      await invoke("validate_accelerator", { s: raw });
+    } catch (err) {
+      warnRequestFailed(err, "validate_accelerator");
+      return;
+    }
+    hotkeyCaptureButton.dataset.accel = raw;
+    syncHotkeyButtonUi(hotkeyCaptureButton);
+    stopHotkeyCapture(false);
+    updateSettingsSaveButtonState();
+  })();
+}
+
+/** @param {HTMLButtonElement} btn */
+function startHotkeyCapture(btn) {
+  if (hotkeyCaptureButton && hotkeyCaptureButton !== btn) {
+    stopHotkeyCapture(true);
+  }
+  hotkeyCaptureButton = btn;
+  hotkeyCapturePrevAccel = (btn.dataset.accel || "").trim();
+  btn.classList.add("hotkeys-input--capturing");
+  btn.textContent = "按下组合键…";
+  document.addEventListener("keydown", onHotkeyCaptureKeydown, true);
+}
+
+function wireHotkeySettingsUi() {
+  document.querySelectorAll(".hotkeys-input").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      startHotkeyCapture(/** @type {HTMLButtonElement} */ (btn));
+    });
+  });
+}
+
+function hotkeyFieldLabel(fieldKey) {
+  const m = {
+    play_pause: "播放/暂停",
+    prev: "上一首",
+    next: "下一首",
+    volume_up: "增大音量",
+    volume_down: "减少音量",
+  };
+  return m[fieldKey] || fieldKey;
+}
+
+/** @param {string} fieldKey play_pause | prev | ... */
+function hotkeyStatusSetConflict(fieldKey, title) {
+  const idMap = {
+    play_pause: "hk-status-play-pause",
+    prev: "hk-status-prev",
+    next: "hk-status-next",
+    volume_up: "hk-status-vol-up",
+    volume_down: "hk-status-vol-down",
+  };
+  const el = document.getElementById(idMap[fieldKey]);
+  if (!el) return;
+  el.dataset.status = "conflict";
+  el.textContent = "冲突";
+  if (title) el.title = title;
+}
+
+function renderHotkeyStatusOk() {
+  const ids = [
+    "hk-status-play-pause",
+    "hk-status-prev",
+    "hk-status-next",
+    "hk-status-vol-up",
+    "hk-status-vol-down",
+  ];
+  for (const id of ids) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    el.dataset.status = "ok";
+    el.textContent = "正常";
+    el.removeAttribute("title");
+  }
+}
+
+/** @param {Record<string, { ok: boolean, error?: string | null }>} report */
+function renderHotkeyStatusFromReport(report) {
+  const map = [
+    ["hk-status-play-pause", report.play_pause],
+    ["hk-status-prev", report.prev],
+    ["hk-status-next", report.next],
+    ["hk-status-vol-up", report.volume_up],
+    ["hk-status-vol-down", report.volume_down],
+  ];
+  for (const [id, st] of map) {
+    const el = document.getElementById(id);
+    if (!el || !st) continue;
+    if (st.ok) {
+      el.dataset.status = "ok";
+      el.textContent = "正常";
+      el.removeAttribute("title");
+    } else {
+      el.dataset.status = "conflict";
+      el.textContent = "冲突";
+      if (st.error) el.title = st.error;
+    }
+  }
+}
+
+function fillHotkeysFormFromSettings(s) {
+  const gh =
+    s?.global_hotkeys ??
+    s?.globalHotkeys ??
+    ({
+      play_pause: "ctrl+alt+space",
+      prev: "ctrl+alt+left",
+      next: "ctrl+alt+right",
+      volume_up: "ctrl+alt+up",
+      volume_down: "ctrl+alt+down",
+      enabled: true,
+    });
+  const en = document.getElementById("setting-hotkeys-enabled");
+  if (en) en.checked = gh.enabled !== false;
+
+  const pairs = [
+    ["hk-play-pause", gh.play_pause ?? gh.playPause],
+    ["hk-prev", gh.prev],
+    ["hk-next", gh.next],
+    ["hk-vol-up", gh.volume_up ?? gh.volumeUp],
+    ["hk-vol-down", gh.volume_down ?? gh.volumeDown],
+  ];
+  for (const [id, val] of pairs) {
+    const btn = document.getElementById(id);
+    if (!btn) continue;
+    btn.dataset.accel = String(val || "").trim().toLowerCase();
+    syncHotkeyButtonUi(btn);
+  }
+  renderHotkeyStatusOk();
+}
+
 function getSettingsFormValues() {
   const sel = document.getElementById("setting-close-action");
   const b = document.getElementById("setting-ly-base");
   const h = document.getElementById("setting-ly-highlight");
   const nb = document.getElementById("setting-netease-api-base");
-  const hk = document.getElementById("setting-hotkey-ctrl-space-play-pause");
+  const globalHotkeys = getGlobalHotkeysPayloadFromDom();
   return {
     action: normalizeCloseAction(sel?.value),
     base: normalizeLyricHexInput(b?.value, "#ffffff"),
     highlight: normalizeLyricHexInput(h?.value, "#ffb7d4"),
     neteaseApiBase: normalizeNeteaseApiBase(nb?.value),
-    ctrlSpacePlayPause: !!(hk && hk.checked),
+    globalHotkeys,
+    hotkeysSig: JSON.stringify(globalHotkeys),
   };
 }
 
@@ -283,7 +558,7 @@ function settingsFormIsDirty() {
     cur.base !== settingsFormBaseline.base ||
     cur.highlight !== settingsFormBaseline.highlight ||
     cur.neteaseApiBase !== settingsFormBaseline.neteaseApiBase ||
-    cur.ctrlSpacePlayPause !== settingsFormBaseline.ctrlSpacePlayPause
+    cur.hotkeysSig !== settingsFormBaseline.hotkeysSig
   );
 }
 
@@ -314,14 +589,7 @@ function fillSettingsFormFromSettings(s) {
       s?.lyrics_netease_api_base ?? s?.lyricsNeteaseApiBase ?? ""
     );
   }
-  const hk = document.getElementById("setting-hotkey-ctrl-space-play-pause");
-  if (hk) {
-    const en = s?.hotkey_ctrl_space_play_pause_enabled ?? s?.hotkeyCtrlSpacePlayPauseEnabled;
-    hk.checked = en !== false;
-    hotkeyCtrlSpacePlayPauseEnabled = hk.checked;
-  } else {
-    hotkeyCtrlSpacePlayPauseEnabled = (s?.hotkey_ctrl_space_play_pause_enabled ?? s?.hotkeyCtrlSpacePlayPauseEnabled) !== false;
-  }
+  fillHotkeysFormFromSettings(s);
   syncSettingsFormBaselineFromDom();
 }
 
@@ -369,30 +637,51 @@ function wireSettingsFormDirtyTracking() {
   document.getElementById("setting-ly-base")?.addEventListener("input", onChange);
   document.getElementById("setting-ly-highlight")?.addEventListener("input", onChange);
   document.getElementById("setting-netease-api-base")?.addEventListener("input", onChange);
-  document.getElementById("setting-hotkey-ctrl-space-play-pause")?.addEventListener("change", (e) => {
-    hotkeyCtrlSpacePlayPauseEnabled = !!e.target?.checked;
-    onChange();
-  });
+  document.getElementById("setting-hotkeys-enabled")?.addEventListener("change", onChange);
 }
 
 function wirePreferencesModals() {
   document.getElementById("btn-settings-back")?.addEventListener("click", () => setPage("discover"));
   wireSettingsFormDirtyTracking();
+  wireHotkeySettingsUi();
   document.getElementById("settings-save")?.addEventListener("click", async () => {
     if (!settingsFormIsDirty()) return;
     const cur = getSettingsFormValues();
     try {
+      if (cur.hotkeysSig !== settingsFormBaseline.hotkeysSig) {
+        try {
+          const seen = new Map();
+          for (const [k, accel] of Object.entries(cur.globalHotkeys)) {
+            if (k === "enabled") continue;
+            const t = String(accel || "").trim();
+            if (!t) continue;
+            if (seen.has(t)) {
+              renderHotkeyStatusOk();
+              const dupField = seen.get(t);
+              const hint = `与「${hotkeyFieldLabel(dupField)}」重复`;
+              hotkeyStatusSetConflict(k, hint);
+              hotkeyStatusSetConflict(dupField, hint);
+              return;
+            }
+            seen.set(t, k);
+          }
+          const report = await invoke("apply_global_hotkeys", { cfg: cur.globalHotkeys });
+          if (report) renderHotkeyStatusFromReport(report);
+        } catch (he) {
+          alertRequestFailed(he, "apply global hotkeys");
+          return;
+        }
+      }
+
       await invoke("save_settings", {
         patch: {
           main_window_close_action: cur.action,
           desktop_lyrics_color_base: cur.base,
           desktop_lyrics_color_highlight: cur.highlight,
           lyrics_netease_api_base: cur.neteaseApiBase,
-          hotkey_ctrl_space_play_pause_enabled: cur.ctrlSpacePlayPause,
         },
       });
       mainWindowCloseAction = cur.action;
-      hotkeyCtrlSpacePlayPauseEnabled = cur.ctrlSpacePlayPause;
       syncSettingsFormBaselineFromDom();
       void broadcastDesktopLyricsColors();
     } catch (e) {
@@ -3452,31 +3741,6 @@ function playFromSearchRow(rowIdx) {
   renderQueuePanel();
 }
 
-/** 焦点在可输入控件内时不抢 Ctrl+Space（避免与搜索框、换行等冲突） */
-function isEditableHotkeyTarget(el) {
-  const t = el?.nodeType === 1 ? el : el?.parentElement;
-  if (!t) return false;
-  if (t.isContentEditable) return true;
-  if (t.closest?.("[contenteditable='true']")) return true;
-  const tag = t.tagName;
-  if (tag === "TEXTAREA" || tag === "SELECT") return true;
-  if (tag !== "INPUT") return false;
-  const ty = (t.getAttribute("type") || "text").toLowerCase();
-  const nonText = new Set([
-    "checkbox",
-    "radio",
-    "button",
-    "submit",
-    "reset",
-    "file",
-    "color",
-    "range",
-    "hidden",
-    "image",
-  ]);
-  return !nonText.has(ty);
-}
-
 async function togglePlayPauseFromHotkey() {
   const a = audioEl();
   if (!a?.src) return;
@@ -3491,21 +3755,30 @@ async function togglePlayPauseFromHotkey() {
   }
 }
 
-function onPlayPauseHotkey(ev) {
-  if (!hotkeyCtrlSpacePlayPauseEnabled) return;
-  if (!ev.ctrlKey || ev.metaKey) return;
-  if (ev.key !== " " && ev.code !== "Space") return;
-  if (isEditableHotkeyTarget(ev.target)) return;
-  ev.preventDefault();
-  ev.stopPropagation();
-  void togglePlayPauseFromHotkey();
+async function adjustPlayerVolumeDelta(delta) {
+  const vol = document.getElementById("volume");
+  if (!vol) return;
+  let next = Number(vol.value) / 100 + delta;
+  next = Math.min(1, Math.max(0, next));
+  vol.value = String(Math.round(next * 100));
+  const a = audioEl();
+  if (a) a.volume = next;
+  try {
+    await invoke("save_settings", { patch: { volume: next } });
+  } catch (e) {
+    console.warn("save_settings volume (hotkey)", e);
+  }
 }
 
-let playPauseHotkeyWired = false;
-function wirePlayPauseHotkey() {
-  if (playPauseHotkeyWired) return;
-  playPauseHotkeyWired = true;
-  document.addEventListener("keydown", onPlayPauseHotkey, true);
+function wireGlobalHotkeyListener() {
+  void listen("global-hotkey", (e) => {
+    const a = e?.payload;
+    if (a === "play_pause") void togglePlayPauseFromHotkey();
+    else if (a === "prev") document.getElementById("btn-player-prev")?.click();
+    else if (a === "next") document.getElementById("btn-player-next")?.click();
+    else if (a === "volume_up") void adjustPlayerVolumeDelta(0.05);
+    else if (a === "volume_down") void adjustPlayerVolumeDelta(-0.05);
+  });
 }
 
 function wireAudio() {
@@ -3842,7 +4115,7 @@ function bootDesktop() {
   wireGlobalSearch();
   wireDiscoverToolbar();
   wireAudio();
-  wirePlayPauseHotkey();
+  wireGlobalHotkeyListener();
   updateSearchToolbar();
   renderQueuePanel();
   refreshLyricsLockMenuLabel();

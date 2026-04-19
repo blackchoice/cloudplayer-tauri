@@ -9,7 +9,7 @@ use walkdir::WalkDir;
 
 use crate::import_enrich;
 
-use crate::config::Settings;
+use crate::config::{GlobalHotkeys, Settings};
 use crate::db::DbState;
 use crate::pjmp3::SearchResultDto;
 use crate::rate_limiter::RateLimiter;
@@ -31,6 +31,38 @@ pub struct SearchResponse {
 #[tauri::command]
 pub fn get_settings() -> Settings {
     Settings::load()
+}
+
+#[tauri::command]
+pub fn get_global_hotkeys() -> GlobalHotkeys {
+    Settings::load().global_hotkeys
+}
+
+#[tauri::command]
+pub fn validate_accelerator(s: String) -> Result<(), String> {
+    crate::global_hotkeys::validate_accelerator_str(&s)
+}
+
+#[tauri::command]
+pub fn apply_global_hotkeys(app: AppHandle, cfg: GlobalHotkeys) -> Result<crate::global_hotkeys::HotkeyApplyReport, String> {
+    #[cfg(desktop)]
+    {
+        let map = app
+            .try_state::<crate::global_hotkeys::HotkeyShortcutMap>()
+            .ok_or_else(|| "内部错误：快捷键状态未初始化".to_string())?;
+        let report = crate::global_hotkeys::apply_global_hotkeys_runtime(&app, &cfg, &map)?;
+        let mut s = Settings::load();
+        s.global_hotkeys = cfg;
+        s.save()?;
+        return Ok(report);
+    }
+    #[cfg(not(desktop))]
+    {
+        let mut s = Settings::load();
+        s.global_hotkeys = cfg;
+        s.save()?;
+        Ok(crate::global_hotkeys::HotkeyApplyReport::all_ok())
+    }
 }
 
 /// 未在设置中指定 `download_folder` 时，与下载落盘使用的默认目录一致（绝对路径）。
@@ -57,7 +89,6 @@ pub struct SettingsPatch {
     pub lyrics_netease_api_base: Option<String>,
     pub lyrics_lrclib_enabled: Option<bool>,
     pub main_window_close_action: Option<String>,
-    pub hotkey_ctrl_space_play_pause_enabled: Option<bool>,
     pub desktop_lyrics_color_base: Option<String>,
     pub desktop_lyrics_color_highlight: Option<String>,
 }
@@ -172,9 +203,6 @@ pub fn save_settings(patch: SettingsPatch) -> Result<(), String> {
         if t == "ask" || t == "quit" || t == "tray" {
             s.main_window_close_action = t;
         }
-    }
-    if let Some(v) = patch.hotkey_ctrl_space_play_pause_enabled {
-        s.hotkey_ctrl_space_play_pause_enabled = v;
     }
     if let Some(v) = patch.desktop_lyrics_color_base {
         let t = v.trim();

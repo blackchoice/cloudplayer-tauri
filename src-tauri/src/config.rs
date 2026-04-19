@@ -98,9 +98,9 @@ pub struct Settings {
     /// 主窗口关闭：`ask` 每次询问，`quit` 退出，`tray` 最小化到托盘
     #[serde(default = "default_main_window_close_action")]
     pub main_window_close_action: String,
-    /// 主窗口聚焦时 `Ctrl+Space` 切换播放/暂停（不在输入框内触发）
-    #[serde(default = "default_hotkey_ctrl_space_play_pause")]
-    pub hotkey_ctrl_space_play_pause_enabled: bool,
+    /// 桌面全局播放控制快捷键（tauri-plugin-global-shortcut）
+    #[serde(default)]
+    pub global_hotkeys: GlobalHotkeys,
     /// 桌面歌词未唱字色（#RRGGBB）
     #[serde(default = "default_desktop_lyrics_color_base")]
     pub desktop_lyrics_color_base: String,
@@ -133,8 +133,29 @@ fn default_main_window_close_action() -> String {
     "ask".to_string()
 }
 
-fn default_hotkey_ctrl_space_play_pause() -> bool {
-    true
+/// 与前端设置表单一致：字符串格式见 global-hotkey 解析（如 `ctrl+alt+space`）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, rename_all = "snake_case")]
+pub struct GlobalHotkeys {
+    pub play_pause: String,
+    pub prev: String,
+    pub next: String,
+    pub volume_up: String,
+    pub volume_down: String,
+    pub enabled: bool,
+}
+
+impl Default for GlobalHotkeys {
+    fn default() -> Self {
+        Self {
+            play_pause: "ctrl+alt+space".to_string(),
+            prev: "ctrl+alt+left".to_string(),
+            next: "ctrl+alt+right".to_string(),
+            volume_up: "ctrl+alt+up".to_string(),
+            volume_down: "ctrl+alt+down".to_string(),
+            enabled: true,
+        }
+    }
 }
 
 fn default_desktop_lyrics_color_base() -> String {
@@ -166,7 +187,7 @@ impl Default for Settings {
             lyrics_netease_api_base: String::new(),
             lyrics_lrclib_enabled: default_lyrics_lrclib(),
             main_window_close_action: default_main_window_close_action(),
-            hotkey_ctrl_space_play_pause_enabled: default_hotkey_ctrl_space_play_pause(),
+            global_hotkeys: GlobalHotkeys::default(),
             desktop_lyrics_color_base: default_desktop_lyrics_color_base(),
             desktop_lyrics_color_highlight: default_desktop_lyrics_color_highlight(),
         }
