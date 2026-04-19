@@ -31,15 +31,178 @@ function errText(e) {
   }
 }
 
+/** 供 `log_play_event` 写入 cloudplayer.log，与 Rust `pj-play` 对照 */
+function audioDiagPayload(a) {
+  let bufferedEnd = null;
+  try {
+    if (a.buffered && a.buffered.length > 0) {
+      bufferedEnd = a.buffered.end(a.buffered.length - 1);
+    }
+  } catch {
+    /* ignore */
+  }
+  return {
+    currentTime: a.currentTime,
+    duration: a.duration,
+    readyState: a.readyState,
+    networkState: a.networkState,
+    bufferedEnd,
+  };
+}
+
+async function logPlayEventMobile(stage, { url = null, error_code = null, message = null, extra = null } = {}) {
+  if (!hasTauriIpc()) return;
+  try {
+    await invoke("log_play_event", {
+      stage,
+      url,
+      error_code,
+      message,
+      extra: extra != null ? (typeof extra === "string" ? extra : JSON.stringify(extra)) : null,
+    });
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * Android WebView：`convertFileSrc` 对本地音频只缓冲开头，约 30s 停播（tauri-apps/tauri#14776）。
+ * 应用内整文件读入后 `Blob` + `URL.createObjectURL` 可完整播放。
+ */
+let lastAudioObjectUrl = null;
+
+function revokeMobileAudioObjectUrl() {
+  if (lastAudioObjectUrl) {
+    try {
+      URL.revokeObjectURL(lastAudioObjectUrl);
+    } catch {
+      /* ignore */
+    }
+    lastAudioObjectUrl = null;
+  }
+}
+
+function mimeForAudioPath(p) {
+  const low = String(p || "").toLowerCase();
+  if (low.endsWith(".mp3")) return "audio/mpeg";
+  if (low.endsWith(".m4a")) return "audio/mp4";
+  if (low.endsWith(".aac")) return "audio/aac";
+  if (low.endsWith(".flac")) return "audio/flac";
+  if (low.endsWith(".ogg")) return "audio/ogg";
+  if (low.endsWith(".wav")) return "audio/wav";
+  return "audio/mpeg";
+}
+
+function bytesToUint8(raw) {
+  if (raw instanceof Uint8Array) return raw;
+  if (raw instanceof ArrayBuffer) return new Uint8Array(raw);
+  if (Array.isArray(raw)) return new Uint8Array(raw);
+  return new Uint8Array(raw);
+}
+
+/** @param {string} path */
+async function playableUrlFromLocalPath(path) {
+  if (!hasTauriIpc()) {
+    return convertFileSrc(path);
+  }
+  const raw = await invoke("read_file_bytes", { path });
+  const u8 = bytesToUint8(raw);
+  revokeMobileAudioObjectUrl();
+  const blob = new Blob([u8], { type: mimeForAudioPath(path) });
+  lastAudioObjectUrl = URL.createObjectURL(blob);
+  return lastAudioObjectUrl;
+}
+
+/** 与桌面 `persistRecentPlaySnapshot` 一致：写入 DB，供 `resolve_online_play` 的「最近播放直链」分支 */
+async function persistRecentPlaySnapshot(snap) {
+  try {
+    if (snap.local_path) {
+      await invoke("record_recent_play", {
+        row: {
+          kind: "local",
+          title: snap.title,
+          artist: snap.artist || "",
+          cover_url: null,
+          pjmp3_source_id: null,
+          file_path: snap.local_path,
+        },
+      });
+    } else {
+      await invoke("record_recent_play", {
+        row: {
+          kind: "online",
+          title: snap.title,
+          artist: snap.artist || "",
+          cover_url: snap.cover_url ?? null,
+          pjmp3_source_id: snap.source_id,
+          file_path: null,
+          play_url: snap.play_url && String(snap.play_url).trim() ? String(snap.play_url).trim() : null,
+        },
+      });
+    }
+  } catch (e) {
+    console.warn("record_recent_play", e);
+  }
+}
+
+/**
+ * 在线曲目成功开播后写入最近播放（含本次 http 直链，便于下次优先解析）
+ * @param {string | null} [onlinePlayUrl]
+ */
+function pushMobileRecentFromCurrentTrack(onlinePlayUrl = null) {
+  const it = playQueue[playIndex];
+  if (!it) return;
+  if (it.local_path) {
+    void persistRecentPlaySnapshot({ title: it.title, artist: it.artist || "", local_path: it.local_path });
+    return;
+  }
+  const sid = (it.source_id || "").trim();
+  if (!sid) return;
+  const pu = onlinePlayUrl && String(onlinePlayUrl).trim() ? String(onlinePlayUrl).trim() : "";
+  void persistRecentPlaySnapshot({
+    source_id: sid,
+    title: it.title,
+    artist: it.artist || "",
+    album: it.album || "",
+    cover_url: it.cover_url || null,
+    ...(pu ? { play_url: pu } : {}),
+  });
+}
+
+/** 补全曲库 id 后更新歌单详情行样式（与桌面更新表格类似） */
+function patchPlaylistDetailRowAfterFill(itemId, _fid) {
+  const li = document.querySelector(`#cp-m-pl-tracks-ul li[data-item-id="${itemId}"]`);
+  if (!li) return;
+  li.style.opacity = "1";
+  const row = playlistDetailRows.find((r) => Number(r.id) === Number(itemId));
+  const sub = li.querySelector(".cp-m-li-sub");
+  if (sub && row) {
+    sub.textContent = row.artist || "";
+  }
+}
+
 const PLACEHOLDER_COVER =
   "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48'%3E%3Crect fill='%23e5e7eb' width='48' height='48'/%3E%3C/svg%3E";
 
-/** @type {Array<{ source_id?: string; title: string; artist: string; album?: string; cover_url?: string | null; local_path?: string }>} */
+/**
+ * @type {Array<{
+ *   source_id?: string;
+ *   title: string;
+ *   artist: string;
+ *   album?: string;
+ *   cover_url?: string | null;
+ *   local_path?: string;
+ *   import_playlist_id?: number | null;
+ *   import_item_id?: number | null;
+ * }>}
+ */
 let playQueue = [];
 let playIndex = 0;
 let playLoadGeneration = 0;
 let audioSourceGeneration = 0;
 let seekDragging = false;
+/** `progress` 上报节流：最多每秒一条 */
+let audioProgressLogLastTs = 0;
 
 /** @type {{ id: number; name: string } | null} */
 let openPlaylistCtx = null;
@@ -688,6 +851,10 @@ function mapRowsToAppendItems(rows) {
     title: row.title || "",
     artist: row.artist || "",
     album: row.album || "",
+    source_id: String(row.source_id ?? row.pjmp3_source_id ?? row.pjmp3SourceId ?? "").trim(),
+    cover_url: String(row.cover_url ?? row.coverUrl ?? "").trim(),
+    duration_ms: Math.max(0, Number(row.duration_ms ?? row.durationMs ?? 0) || 0),
+    play_url: String(row.play_url ?? row.playUrl ?? "").trim(),
   }));
 }
 
@@ -739,23 +906,19 @@ function wirePlaylistDetailTrackRow(li, r, i, rows) {
       toggleDetailRowSelection(itemId, li);
       return;
     }
-    const sid = (r.pjmp3_source_id || "").trim();
-    if (!sid) return;
-    const playable = rows
-      .filter((row) => (row.pjmp3_source_id || "").trim())
-      .map((row) => ({
-        source_id: (row.pjmp3_source_id || "").trim(),
-        title: row.title,
-        artist: row.artist || "",
-        album: row.album || "",
-        cover_url: (row.cover_url || "").trim() || null,
-      }));
-    let start = 0;
-    for (let j = 0; j < i; j++) {
-      if ((rows[j].pjmp3_source_id || "").trim()) start++;
-    }
-    playQueue = playable;
-    void playFromQueueIndex(start);
+    const pid = openPlaylistCtx?.id;
+    if (pid == null) return;
+    /** 与桌面 `openSidebarPlaylistContextMenu` / `playlistImportRowToQueueItem` 一致：可无 source_id，播放时 `try_fill` */
+    playQueue = rows.map((row) => ({
+      source_id: (row.pjmp3_source_id || "").trim(),
+      title: row.title,
+      artist: row.artist || "",
+      album: row.album || "",
+      cover_url: (row.cover_url || "").trim() || null,
+      import_playlist_id: Number(pid),
+      import_item_id: row.id != null ? row.id : null,
+    }));
+    void playFromQueueIndex(i);
   });
 }
 
@@ -1064,8 +1227,9 @@ async function runDiscoverSearch() {
 async function playFromQueueIndex(idx) {
   if (!playQueue.length || idx < 0 || idx >= playQueue.length) return;
   const generation = ++playLoadGeneration;
+  revokeMobileAudioObjectUrl();
   playIndex = idx;
-  const item = playQueue[idx];
+  let item = playQueue[idx];
   setChrome({
     title: item.title,
     sub: item.local_path ? `${item.artist || ""} · 本地` : `${item.artist || ""} · 在线`,
@@ -1073,6 +1237,10 @@ async function playFromQueueIndex(idx) {
   });
   const playBtn = document.getElementById("cp-m-play");
   const a = audioEl();
+  /** 在线且最终走直链时写入最近播放，供 `resolve_online_play` 的 recent 分支 */
+  let onlineResolvedPlayUrl = null;
+  /** @type {Record<string, unknown> | null} */
+  let playLogExtra = null;
   try {
     let assetUrl;
     if (item.local_path) {
@@ -1081,23 +1249,95 @@ async function playFromQueueIndex(idx) {
         alert("本地文件不可用");
         return;
       }
-      assetUrl = convertFileSrc(item.local_path);
+      assetUrl = await playableUrlFromLocalPath(item.local_path);
+      playLogExtra = { local: true };
     } else {
-      const resolved = await invoke("resolve_online_play", {
-        songId: item.source_id,
-        title: item.title || "",
-        artist: item.artist || "",
-      });
+      let songId = (item.source_id || "").trim();
+      const iPl = item.import_playlist_id;
+      const iRow = item.import_item_id;
+      if (!songId && iPl != null && iRow != null) {
+        setChrome({
+          title: item.title,
+          sub: "正在匹配曲库 id…",
+          coverUrl: item.cover_url || null,
+        });
+        try {
+          const filled = await invoke("try_fill_playlist_item_source_id", {
+            playlistId: iPl,
+            itemId: iRow,
+          });
+          if (generation !== playLoadGeneration) return;
+          if (filled && String(filled).trim()) {
+            const fid = String(filled).trim();
+            item = { ...item, source_id: fid };
+            playQueue[idx] = item;
+            songId = fid;
+            const match = playlistDetailRows.find((row) => Number(row.id) === Number(iRow));
+            if (match) match.pjmp3_source_id = fid;
+            patchPlaylistDetailRowAfterFill(Number(iRow), fid);
+          }
+        } catch (e) {
+          console.warn("try_fill_playlist_item_source_id", e);
+        }
+      }
       if (generation !== playLoadGeneration) return;
+      if (!songId) {
+        setChrome({
+          title: item.title,
+          sub: "无法播放：未匹配到曲库 id",
+          coverUrl: item.cover_url || null,
+        });
+        alert("无法匹配曲库 id。请在「发现」中搜索该曲，或确认歌名/歌手是否正确。");
+        return;
+      }
+      /** 后端顺序：本地曲库 → 下载记录(曲库id) → 下载目录同名 → 试听缓存 → 最近播放直链 → 拉取试听/直链（与桌面相同重试） */
+      const resolveRetryBudgetMs = 5000;
+      const resolveRetryGapMs = 200;
+      const resolveT0 = Date.now();
+      let resolved = null;
+      let lastErr = null;
+      for (;;) {
+        if (generation !== playLoadGeneration) return;
+        if (Date.now() - resolveT0 >= resolveRetryBudgetMs) break;
+        try {
+          resolved = await invoke("resolve_online_play", {
+            songId,
+            title: item.title || "",
+            artist: item.artist || "",
+          });
+          lastErr = null;
+          break;
+        } catch (e) {
+          lastErr = e;
+          if (Date.now() - resolveT0 >= resolveRetryBudgetMs) break;
+          const wait = Math.min(resolveRetryGapMs, resolveRetryBudgetMs - (Date.now() - resolveT0));
+          if (wait > 0) {
+            await new Promise((r) => setTimeout(r, wait));
+          }
+        }
+      }
+      if (generation !== playLoadGeneration) return;
+      if (!resolved) throw lastErr ?? new Error("resolve_online_play failed");
       if (resolved.kind === "url" && resolved.url) {
+        /** 仍记录直链，供 record_recent_play / 桌面端逻辑一致；与桌面 main.js 一致：直链赋给 `<audio>` */
+        onlineResolvedPlayUrl = resolved.url;
         assetUrl = resolved.url;
       } else if (resolved.kind === "file" && resolved.path) {
-        assetUrl = convertFileSrc(resolved.path);
+        assetUrl = await playableUrlFromLocalPath(resolved.path);
       } else {
-        throw new Error("无效播放地址");
+        throw new Error("resolve_online_play: 无效结果");
       }
+      playLogExtra = {
+        sid: songId,
+        kind: resolved.kind,
+        via: resolved.via,
+      };
     }
     if (generation !== playLoadGeneration) return;
+    await logPlayEventMobile("play_start", {
+      url: assetUrl,
+      extra: playLogExtra,
+    });
     a.pause();
     a.removeAttribute("src");
     a.load();
@@ -1105,10 +1345,21 @@ async function playFromQueueIndex(idx) {
     audioSourceGeneration = generation;
     await a.play();
     if (generation !== playLoadGeneration) return;
+    pushMobileRecentFromCurrentTrack(onlineResolvedPlayUrl);
+    setChrome({
+      title: item.title,
+      sub: item.local_path ? `${item.artist || ""} · 本地` : `${item.artist || ""} · 在线`,
+      coverUrl: item.cover_url || null,
+    });
     if (playBtn) playBtn.textContent = "⏸";
   } catch (e) {
     console.warn("playFromQueueIndex", e);
-    alert("无法播放");
+    setChrome({
+      title: item.title,
+      sub: "请求失败",
+      coverUrl: item.cover_url || null,
+    });
+    alert(`无法播放：${errText(e)}`);
   }
 }
 
@@ -1118,14 +1369,61 @@ function wirePlayer() {
   const seek = document.getElementById("cp-m-seek");
 
   a.addEventListener("timeupdate", syncSeekUi);
-  a.addEventListener("loadedmetadata", syncSeekUi);
+  a.addEventListener("loadedmetadata", () => {
+    syncSeekUi();
+    if (audioSourceGeneration === playLoadGeneration) {
+      void logPlayEventMobile("audio_loadedmetadata", {
+        url: a.src || null,
+        extra: audioDiagPayload(a),
+      });
+    }
+  });
+  a.addEventListener("progress", () => {
+    if (audioSourceGeneration !== playLoadGeneration) return;
+    const now = Date.now();
+    if (now - audioProgressLogLastTs < 1000) return;
+    audioProgressLogLastTs = now;
+    void logPlayEventMobile("audio_progress", {
+      url: a.src || null,
+      extra: audioDiagPayload(a),
+    });
+  });
+  a.addEventListener("stalled", () => {
+    if (audioSourceGeneration !== playLoadGeneration) return;
+    void logPlayEventMobile("audio_stalled", {
+      url: a.src || null,
+      extra: audioDiagPayload(a),
+    });
+  });
   a.addEventListener("ended", () => {
+    if (audioSourceGeneration === playLoadGeneration) {
+      void logPlayEventMobile("audio_ended", {
+        url: a.src || null,
+        extra: audioDiagPayload(a),
+      });
+    }
     if (playIndex < playQueue.length - 1) {
       void playFromQueueIndex(playIndex + 1);
     } else if (playBtn) {
       playBtn.textContent = "▶";
     }
     syncSeekUi();
+  });
+  /** 与桌面一致：丢弃切歌过程中的 error；4 = SRC_NOT_SUPPORTED（直链/WebView 策略） */
+  a.addEventListener("error", () => {
+    const err = a.error;
+    if (err && err.code === 1) return;
+    if (audioSourceGeneration !== playLoadGeneration) return;
+    void logPlayEventMobile("audio_error", {
+      url: a.src || null,
+      error_code: err ? err.code : null,
+      message: err && err.message ? err.message : null,
+      extra: audioDiagPayload(a),
+    });
+    const sub = document.getElementById("cp-m-dock-sub");
+    if (sub && err && err.code === 4) {
+      sub.textContent = "无法加载音频（可重试）";
+    }
   });
   a.addEventListener("play", () => {
     if (playBtn) playBtn.textContent = "⏸";

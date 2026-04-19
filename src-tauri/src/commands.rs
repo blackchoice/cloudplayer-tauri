@@ -1,11 +1,10 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use log::{info, warn};
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
-#[cfg(desktop)]
-use tauri::Manager;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use walkdir::WalkDir;
 
 use crate::import_enrich;
@@ -207,6 +206,34 @@ pub fn db_status(state: State<'_, DbState>) -> Result<String, String> {
     ))
 }
 
+/// 返回 `cloudplayer.log` 的绝对路径（与 `logging::init_from_app` 一致），便于 Android root / 排障对照。
+#[tauri::command]
+pub fn get_app_log_path(app: AppHandle) -> Result<String, String> {
+    let log_dir = app.path().app_log_dir().map_err(|e| e.to_string())?;
+    Ok(log_dir.join("cloudplayer.log").to_string_lossy().to_string())
+}
+
+/// 供移动端整文件读入后 `Blob` 播放（规避 Android 上 `convertFileSrc` 只缓冲开头、约 30s 停播，见 tauri#14776）。
+#[tauri::command]
+pub fn read_file_bytes(path: String) -> Result<Vec<u8>, String> {
+    let p = path.trim();
+    if p.is_empty() {
+        return Err("空路径".to_string());
+    }
+    if p.contains("..") {
+        return Err("非法路径".to_string());
+    }
+    let meta = std::fs::metadata(p).map_err(|e| e.to_string())?;
+    if !meta.is_file() {
+        return Err("不是文件".to_string());
+    }
+    const MAX: u64 = 80 * 1024 * 1024;
+    if meta.len() > MAX {
+        return Err("文件过大".to_string());
+    }
+    std::fs::read(p).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn search_songs(
     state: State<'_, Arc<AppState>>,
@@ -307,6 +334,52 @@ fn recent_play_stored_preview_url(conn: &rusqlite::Connection, sid: &str) -> Opt
     .filter(|s| !s.trim().is_empty())
 }
 
+fn log_url_160(s: &str) -> String {
+    let t: String = s.chars().take(160).collect();
+    if s.len() > 160 {
+        format!("{t}…")
+    } else {
+        t
+    }
+}
+
+/// 前端 `<audio>` 事件回写到 `cloudplayer.log`，与 Rust 侧 `pj-play` 日志对照排障。
+#[tauri::command]
+pub fn log_play_event(
+    stage: String,
+    url: Option<String>,
+    error_code: Option<i32>,
+    message: Option<String>,
+    extra: Option<String>,
+) -> Result<(), String> {
+    let url_s = url.as_deref().map(log_url_160).unwrap_or_else(|| "-".to_string());
+    let msg = message.as_deref().unwrap_or("-");
+    let ex = extra.as_deref().unwrap_or("");
+    let st = stage.trim();
+    if st.contains("error") || st.ends_with("_err") {
+        warn!(
+            target: "pj-play",
+            "webview stage={} url={} code={:?} msg={} extra={}",
+            st,
+            url_s,
+            error_code,
+            msg,
+            ex
+        );
+    } else {
+        info!(
+            target: "pj-play",
+            "webview stage={} url={} code={:?} msg={} extra={}",
+            st,
+            url_s,
+            error_code,
+            msg,
+            ex
+        );
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn resolve_online_play(
     state: State<'_, Arc<AppState>>,
@@ -315,8 +388,14 @@ pub async fn resolve_online_play(
     title: String,
     artist: String,
 ) -> Result<ResolveOnlinePlayOut, String> {
+    let t0 = std::time::Instant::now();
     let sid = song_id.trim();
     if sid.is_empty() {
+        warn!(
+            target: "pj-play",
+            "resolve_online_play reject empty_id elapsed_ms={}",
+            t0.elapsed().as_millis()
+        );
         return Err("无效的歌曲 ID".to_string());
     }
     let tit = title.trim();
@@ -333,11 +412,50 @@ pub async fn resolve_online_play(
             .map(|m| m.is_file() && m.len() > 0)
             .unwrap_or(false)
         {
+            let path_str = p.to_string_lossy().to_string();
+            info!(
+                target: "pj-play",
+                "resolve_online_play ok sid={} via=local_library elapsed_ms={} path_len={} path_prefix={}",
+                sid,
+                t0.elapsed().as_millis(),
+                path_str.len(),
+                log_url_160(&path_str)
+            );
             return Ok(ResolveOnlinePlayOut {
                 kind: "file".to_string(),
-                path: Some(p.to_string_lossy().to_string()),
+                path: Some(path_str),
                 url: None,
                 via: "local_library".to_string(),
+            });
+        }
+    }
+
+    // 1a) 已下载记录（按曲库 id，不依赖歌名与落盘文件名一致）
+    let dl_paths: Vec<String> = {
+        let conn = db.conn.lock().map_err(|e| e.to_string())?;
+        crate::db::downloaded_track_paths_by_source_id(&conn, sid).map_err(|e| e.to_string())?
+    };
+    for fp in dl_paths {
+        let p = PathBuf::from(&fp);
+        if tokio::fs::metadata(&p)
+            .await
+            .map(|m| m.is_file() && m.len() > 0)
+            .unwrap_or(false)
+        {
+            let path_str = p.to_string_lossy().to_string();
+            info!(
+                target: "pj-play",
+                "resolve_online_play ok sid={} via=downloaded_track elapsed_ms={} path_len={} path_prefix={}",
+                sid,
+                t0.elapsed().as_millis(),
+                path_str.len(),
+                log_url_160(&path_str)
+            );
+            return Ok(ResolveOnlinePlayOut {
+                kind: "file".to_string(),
+                path: Some(path_str),
+                url: None,
+                via: "downloaded_track".to_string(),
             });
         }
     }
@@ -349,9 +467,18 @@ pub async fn resolve_online_play(
             .map(|m| m.is_file() && m.len() > 0)
             .unwrap_or(false)
         {
+            let path_str = p.to_string_lossy().to_string();
+            info!(
+                target: "pj-play",
+                "resolve_online_play ok sid={} via=download elapsed_ms={} path_len={} path_prefix={}",
+                sid,
+                t0.elapsed().as_millis(),
+                path_str.len(),
+                log_url_160(&path_str)
+            );
             return Ok(ResolveOnlinePlayOut {
                 kind: "file".to_string(),
-                path: Some(p.to_string_lossy().to_string()),
+                path: Some(path_str),
                 url: None,
                 via: "download".to_string(),
             });
@@ -360,9 +487,18 @@ pub async fn resolve_online_play(
 
     // 2) 试听磁盘缓存
     if let Some(p) = crate::pjmp3::preview_cache_path_if_exists(sid) {
+        let path_str = p.to_string_lossy().to_string();
+        info!(
+            target: "pj-play",
+            "resolve_online_play ok sid={} via=preview_cache elapsed_ms={} path_len={} path_prefix={}",
+            sid,
+            t0.elapsed().as_millis(),
+            path_str.len(),
+            log_url_160(&path_str)
+        );
         return Ok(ResolveOnlinePlayOut {
             kind: "file".to_string(),
-            path: Some(p.to_string_lossy().to_string()),
+            path: Some(path_str),
             url: None,
             via: "preview_cache".to_string(),
         });
@@ -374,10 +510,19 @@ pub async fn resolve_online_play(
         recent_play_stored_preview_url(&conn, sid)
     };
     if let Some(u) = stored_recent_url {
+        let url_trim = u.trim().to_string();
+        info!(
+            target: "pj-play",
+            "resolve_online_play ok sid={} via=recent_play_url elapsed_ms={} url_len={} url_prefix={}",
+            sid,
+            t0.elapsed().as_millis(),
+            url_trim.len(),
+            log_url_160(&url_trim)
+        );
         return Ok(ResolveOnlinePlayOut {
             kind: "url".to_string(),
             path: None,
-            url: Some(u),
+            url: Some(url_trim),
             via: "recent_play_url".to_string(),
         });
     }
@@ -385,9 +530,18 @@ pub async fn resolve_online_play(
     state.limiter.acquire_slot().await;
     let err_preview = match crate::pjmp3::cache_preview_audio_file(&state.client, sid).await {
         Ok(p) => {
+            let path_str = p.to_string_lossy().to_string();
+            info!(
+                target: "pj-play",
+                "resolve_online_play ok sid={} via=fetched_preview elapsed_ms={} path_len={} path_prefix={}",
+                sid,
+                t0.elapsed().as_millis(),
+                path_str.len(),
+                log_url_160(&path_str)
+            );
             return Ok(ResolveOnlinePlayOut {
                 kind: "file".to_string(),
-                path: Some(p.to_string_lossy().to_string()),
+                path: Some(path_str),
                 url: None,
                 via: "fetched_preview".to_string(),
             });
@@ -395,26 +549,67 @@ pub async fn resolve_online_play(
         Err(e) => e,
     };
 
+    warn!(
+        target: "pj-play",
+        "resolve_online_play fetched_preview_failed sid={} elapsed_ms={} err={} — try direct_url",
+        sid,
+        t0.elapsed().as_millis(),
+        err_preview
+    );
+
     state.limiter.acquire_slot().await;
     match crate::pjmp3::fetch_preview_url(&state.client, sid).await {
         Ok(Some(url)) => {
             let u = url.trim();
             if !u.is_empty() {
+                let u_owned = u.to_string();
+                info!(
+                    target: "pj-play",
+                    "resolve_online_play ok sid={} via=direct_url elapsed_ms={} url_len={} url_prefix={}",
+                    sid,
+                    t0.elapsed().as_millis(),
+                    u_owned.len(),
+                    log_url_160(&u_owned)
+                );
                 return Ok(ResolveOnlinePlayOut {
                     kind: "url".to_string(),
                     path: None,
-                    url: Some(u.to_string()),
+                    url: Some(u_owned),
                     via: "direct_url".to_string(),
                 });
             }
-            Err(format!(
-                "{err_preview}；直链降级：未解析到 MP3 地址"
-            ))
+            let msg = format!("{err_preview}；直链降级：未解析到 MP3 地址");
+            warn!(
+                target: "pj-play",
+                "resolve_online_play fail sid={} elapsed_ms={} err={}",
+                sid,
+                t0.elapsed().as_millis(),
+                msg
+            );
+            Err(msg)
         }
-        Ok(None) => Err(format!(
-            "{err_preview}；直链降级：未解析到 MP3 地址"
-        )),
-        Err(e) => Err(format!("{err_preview}；直链降级失败：{e}")),
+        Ok(None) => {
+            let msg = format!("{err_preview}；直链降级：未解析到 MP3 地址");
+            warn!(
+                target: "pj-play",
+                "resolve_online_play fail sid={} elapsed_ms={} err={}",
+                sid,
+                t0.elapsed().as_millis(),
+                msg
+            );
+            Err(msg)
+        }
+        Err(e) => {
+            let msg = format!("{err_preview}；直链降级失败：{e}");
+            warn!(
+                target: "pj-play",
+                "resolve_online_play fail sid={} elapsed_ms={} err={}",
+                sid,
+                t0.elapsed().as_millis(),
+                msg
+            );
+            Err(msg)
+        }
     }
 }
 
@@ -424,6 +619,14 @@ pub struct ImportItemIn {
     pub artist: String,
     #[serde(default)]
     pub album: String,
+    #[serde(default, alias = "pjmp3_source_id", alias = "pjmp3SourceId")]
+    pub source_id: String,
+    #[serde(default, alias = "coverUrl")]
+    pub cover_url: String,
+    #[serde(default, alias = "playUrl")]
+    pub play_url: String,
+    #[serde(default, alias = "durationMs")]
+    pub duration_ms: i64,
 }
 
 #[derive(Serialize)]
@@ -633,17 +836,25 @@ pub fn replace_playlist_import_items(
     )
     .map_err(|e| e.to_string())?;
     for (i, t) in items.iter().enumerate() {
+        let play_url = t.play_url.trim();
+        let source_id = t.source_id.trim();
+        let cover_url = t.cover_url.trim();
+        let duration_ms = t.duration_ms.max(0);
         tx.execute(
             r#"INSERT INTO playlist_import_items (
                 playlist_id, sort_order, title, artist, album, play_url, pjmp3_source_id,
                 cover_url, cover_cache_path, duration_ms, audio_cache_path
-            ) VALUES (?1, ?2, ?3, ?4, ?5, '', '', '', '', 0, '')"#,
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, '', ?9, '')"#,
             rusqlite::params![
                 playlist_id,
                 i as i64,
                 t.title.trim(),
                 t.artist.trim(),
                 t.album.trim(),
+                play_url,
+                source_id,
+                cover_url,
+                duration_ms,
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -676,17 +887,25 @@ pub fn append_playlist_import_items(
     )
     .map_err(|e| e.to_string())?;
     for (i, t) in items.iter().enumerate() {
+        let play_url = t.play_url.trim();
+        let source_id = t.source_id.trim();
+        let cover_url = t.cover_url.trim();
+        let duration_ms = t.duration_ms.max(0);
         tx.execute(
             r#"INSERT INTO playlist_import_items (
                 playlist_id, sort_order, title, artist, album, play_url, pjmp3_source_id,
                 cover_url, cover_cache_path, duration_ms, audio_cache_path
-            ) VALUES (?1, ?2, ?3, ?4, ?5, '', '', '', '', 0, '')"#,
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, '', ?9, '')"#,
             rusqlite::params![
                 playlist_id,
                 i as i64,
                 t.title.trim(),
                 t.artist.trim(),
                 t.album.trim(),
+                play_url,
+                source_id,
+                cover_url,
+                duration_ms,
             ],
         )
         .map_err(|e| e.to_string())?;

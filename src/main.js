@@ -25,6 +25,9 @@ const searchState = {
   busy: false,
 };
 
+/** 已下载曲库 id（与 `downloaded_tracks.pjmp3_source_id` 一致），用于发现/歌单表格 */
+let downloadedSourceIds = new Set();
+
 /** 与设置「启用 Ctrl+Space 播放/暂停」同步；未打开设置页时仍依此值 */
 let hotkeyCtrlSpacePlayPauseEnabled = true;
 
@@ -36,6 +39,8 @@ let seekDragging = false;
 let playLoadGeneration = 0;
 /** 当前 audio 元素对应的加载世代（在成功写入 src 后赋值） */
 let audioSourceGeneration = 0;
+/** `progress` 上报节流：最多每秒一条 */
+let audioProgressLogLastTs = 0;
 
 /** 不向用户展示后端/网络异常细节（仅控制台保留完整错误） */
 const MSG_REQUEST_FAILED = "请求失败";
@@ -48,6 +53,40 @@ function warnRequestFailed(e, label) {
 function alertRequestFailed(e, label) {
   warnRequestFailed(e, label);
   alert(MSG_REQUEST_FAILED);
+}
+
+/** 供 `log_play_event` 写入 cloudplayer.log，与 Rust `pj-play` / 移动端对照 */
+function audioDiagPayload(a) {
+  let bufferedEnd = null;
+  try {
+    if (a.buffered && a.buffered.length > 0) {
+      bufferedEnd = a.buffered.end(a.buffered.length - 1);
+    }
+  } catch {
+    /* ignore */
+  }
+  return {
+    currentTime: a.currentTime,
+    duration: a.duration,
+    readyState: a.readyState,
+    networkState: a.networkState,
+    bufferedEnd,
+  };
+}
+
+async function logPlayEventDesktop(stage, { url = null, error_code = null, message = null, extra = null } = {}) {
+  if (typeof window.__TAURI_INTERNALS__ === "undefined") return;
+  try {
+    await invoke("log_play_event", {
+      stage,
+      url,
+      error_code,
+      message,
+      extra: extra != null ? (typeof extra === "string" ? extra : JSON.stringify(extra)) : null,
+    });
+  } catch {
+    /* ignore */
+  }
 }
 
 /** 与 Py 版 PlayMode 对应：序 → 循 → 单 → 随 */
@@ -949,7 +988,28 @@ function buildDownloadSubmenu(track) {
   return dlRow;
 }
 
-/** @param {{ title: string, artist: string, album?: string, sourceId?: string, coverUrl?: string | null }} t */
+/**
+ * @param {{ title?: string, artist?: string, album?: string, sourceId?: string, source_id?: string, pjmp3_source_id?: string, coverUrl?: string | null, cover_url?: string | null, playUrl?: string, play_url?: string, durationMs?: number, duration_ms?: number }} track
+ */
+function buildPlaylistImportItem(track = {}) {
+  const sid = String(
+    track.sourceId ?? track.source_id ?? track.pjmp3_source_id ?? ""
+  ).trim();
+  const cover = String(track.coverUrl ?? track.cover_url ?? "").trim();
+  const playUrl = String(track.playUrl ?? track.play_url ?? "").trim();
+  const durationRaw = Number(track.durationMs ?? track.duration_ms ?? 0);
+  return {
+    title: String(track.title || "").trim(),
+    artist: String(track.artist || "").trim(),
+    album: String(track.album || "").trim(),
+    source_id: sid,
+    cover_url: cover,
+    play_url: playUrl,
+    duration_ms: Number.isFinite(durationRaw) && durationRaw > 0 ? Math.round(durationRaw) : 0,
+  };
+}
+
+/** @param {{ title: string, artist: string, album?: string, sourceId?: string, coverUrl?: string | null, durationMs?: number }} t */
 function buildAddToSubmenu(t) {
   const addRow = document.createElement("div");
   addRow.className = "ctx-menu__row--sub";
@@ -1000,7 +1060,7 @@ function buildAddToSubmenu(t) {
       const pid = await invoke("create_playlist", { name: name.trim() });
       await invoke("append_playlist_import_items", {
         playlistId: pid,
-        items: [{ title: t.title, artist: t.artist || "", album: t.album || "" }],
+        items: [buildPlaylistImportItem(t)],
       });
       await refreshSidebarPlaylists();
       await refreshPlaylistSelect();
@@ -1049,7 +1109,15 @@ async function openSearchRowContextMenu(ev, rowIdx) {
       cmBtn(name, async () => {
         await invoke("append_playlist_import_items", {
           playlistId: pid,
-          items: [{ title: r.title, artist: r.artist || "", album: r.album || "" }],
+          items: [
+            buildPlaylistImportItem({
+              title: r.title,
+              artist: r.artist || "",
+              album: r.album || "",
+              sourceId: r.source_id,
+              coverUrl: r.cover_url || "",
+            }),
+          ],
         });
         await refreshSidebarPlaylists();
       })
@@ -1167,6 +1235,7 @@ async function openPlaylistDetailRowContextMenu(ev, rowIdx) {
     album: r.album,
     sourceId: r.pjmp3_source_id,
     coverUrl: r.cover_url,
+    durationMs: r.duration_ms,
   });
   let any = false;
   for (const p of pls) {
@@ -1179,7 +1248,16 @@ async function openPlaylistDetailRowContextMenu(ev, rowIdx) {
       cmBtn(name, async () => {
         await invoke("append_playlist_import_items", {
           playlistId: pid,
-          items: [{ title: r.title, artist: r.artist || "", album: r.album || "" }],
+          items: [
+            buildPlaylistImportItem({
+              title: r.title,
+              artist: r.artist || "",
+              album: r.album || "",
+              sourceId: r.pjmp3_source_id,
+              coverUrl: r.cover_url || "",
+              durationMs: r.duration_ms,
+            }),
+          ],
         });
         await refreshSidebarPlaylists();
       })
@@ -1329,7 +1407,14 @@ async function openDownloadedSongRowContextMenu(ev, rowIdx) {
       const pid = await invoke("create_playlist", { name: name.trim() });
       await invoke("append_playlist_import_items", {
         playlistId: pid,
-        items: [{ title: r.title, artist: r.artist || "", album: r.album || "" }],
+        items: [
+          buildPlaylistImportItem({
+            title: r.title,
+            artist: r.artist || "",
+            album: r.album || "",
+            sourceId: r.pjmp3_source_id ?? r.pjmp3SourceId,
+          }),
+        ],
       });
       await refreshSidebarPlaylists();
       await refreshPlaylistSelect();
@@ -1346,7 +1431,14 @@ async function openDownloadedSongRowContextMenu(ev, rowIdx) {
       cmBtn(name, async () => {
         await invoke("append_playlist_import_items", {
           playlistId: pid,
-          items: [{ title: r.title, artist: r.artist || "", album: r.album || "" }],
+          items: [
+            buildPlaylistImportItem({
+              title: r.title,
+              artist: r.artist || "",
+              album: r.album || "",
+              sourceId: r.pjmp3_source_id ?? r.pjmp3SourceId,
+            }),
+          ],
         });
         await refreshSidebarPlaylists();
       })
@@ -1469,7 +1561,13 @@ async function openLocalLibraryRowContextMenu(ev, rowIdx) {
       const pid = await invoke("create_playlist", { name: name.trim() });
       await invoke("append_playlist_import_items", {
         playlistId: pid,
-        items: [{ title: r.title, artist: r.artist || "", album: r.album || "" }],
+        items: [
+          buildPlaylistImportItem({
+            title: r.title,
+            artist: r.artist || "",
+            album: r.album || "",
+          }),
+        ],
       });
       await refreshSidebarPlaylists();
       await refreshPlaylistSelect();
@@ -1486,7 +1584,13 @@ async function openLocalLibraryRowContextMenu(ev, rowIdx) {
       cmBtn(name, async () => {
         await invoke("append_playlist_import_items", {
           playlistId: pid,
-          items: [{ title: r.title, artist: r.artist || "", album: r.album || "" }],
+          items: [
+            buildPlaylistImportItem({
+              title: r.title,
+              artist: r.artist || "",
+              album: r.album || "",
+            }),
+          ],
         });
         await refreshSidebarPlaylists();
       })
@@ -1832,6 +1936,42 @@ function formatLoadingSubtitle(track) {
   return `${base} · ${track?.local_path ? "正在加载本地文件…" : "正在拉取音频…"}`;
 }
 
+async function refreshDownloadedSourceIdSet() {
+  try {
+    const rows = await invoke("list_downloaded_songs");
+    downloadedSourceIds = new Set(
+      (rows || [])
+        .map((r) => String(r.pjmp3SourceId ?? r.pjmp3_source_id ?? "").trim())
+        .filter(Boolean),
+    );
+  } catch {
+    downloadedSourceIds = new Set();
+  }
+}
+
+/**
+ * 发现搜索 / 导入歌单表格中「标题」列：标题 + 歌手；已下载曲目在歌手行右侧显示小字「已下载」。
+ * @param {{ title?: string, artist?: string, source_id?: string, pjmp3_source_id?: string }} r
+ * @param {{ titleFallback?: string }} [opts]
+ */
+function discoverPlaylistTitleCellHtml(r, opts = {}) {
+  const titleFallback = opts.titleFallback ?? "—";
+  const sid = String(r.source_id ?? r.pjmp3_source_id ?? "").trim();
+  const showDl = sid && downloadedSourceIds.has(sid);
+  const hasTitle = r.title != null && String(r.title).trim() !== "";
+  const titleLine = `<span class="t-title">${escapeHtml(hasTitle ? String(r.title) : titleFallback)}</span>`;
+  const hasArt = (r.artist || "").trim();
+  if (!hasArt) {
+    if (!showDl) return titleLine;
+    return `${titleLine}<div class="t-art-row t-art-row--end"><span class="t-dl-badge">已下载</span></div>`;
+  }
+  const artEsc = escapeHtml(r.artist);
+  const artBlock = showDl
+    ? `<div class="t-art-row"><span class="t-art">${artEsc}</span><span class="t-dl-badge">已下载</span></div>`
+    : `<span class="t-art">${artEsc}</span>`;
+  return `${titleLine}${artBlock}`;
+}
+
 function scheduleDesktopLyricsStyleSync() {
   queueMicrotask(() => {
     void broadcastDesktopLyricsLock();
@@ -2047,6 +2187,7 @@ async function loadPlaylistDetail(id, name) {
     playlistDetailRows = [];
     alertRequestFailed(e, "list_playlist_import_items");
   }
+  await refreshDownloadedSourceIdSet();
   setPlaylistBatchView(false);
   renderPlaylistDetailTable();
 }
@@ -2081,9 +2222,7 @@ function renderPlaylistDetailTable() {
     const cover = (r.cover_url || "").trim();
     const liked = ok && likedIds.has(sid);
     const dur = formatDurationMs(r.duration_ms);
-    const titleHtml = r.artist
-      ? `<span class="t-title">${escapeHtml(r.title || "—")}</span><span class="t-art">${escapeHtml(r.artist)}</span>`
-      : `<span class="t-title">${escapeHtml(r.title || "—")}</span>`;
+    const titleHtml = discoverPlaylistTitleCellHtml(r);
     const coverHtml = cover
       ? `<img class="row-cover" src="${escapeHtml(cover)}" alt="" width="40" height="40" loading="lazy" />`
       : `<div class="row-cover-ph" aria-hidden="true"></div>`;
@@ -2177,9 +2316,7 @@ function renderPlaylistBatchTable() {
     const coverHtml = cover
       ? `<img class="row-cover" src="${escapeHtml(cover)}" alt="" width="40" height="40" loading="lazy" />`
       : `<div class="row-cover-ph" aria-hidden="true"></div>`;
-    const titleHtml = r.artist
-      ? `<span class="t-title">${escapeHtml(r.title || "—")}</span><span class="t-art">${escapeHtml(r.artist)}</span>`
-      : `<span class="t-title">${escapeHtml(r.title || "—")}</span>`;
+    const titleHtml = discoverPlaylistTitleCellHtml(r);
     const tagNoId = sid ? "" : ` <span class="tag-no-id">无ID</span>`;
     tr.innerHTML = `
       <td class="col-check"><input type="checkbox" class="batch-row-check" data-row-index="${i}" checked /></td>
@@ -2644,9 +2781,7 @@ function renderSearchTable() {
     const coverHtml = r.cover_url
       ? `<img class="row-cover" src="${escapeHtml(r.cover_url)}" alt="" width="40" height="40" loading="lazy" />`
       : `<div class="row-cover-ph" aria-hidden="true"></div>`;
-    const titleBlock = r.artist
-      ? `<span class="t-title">${escapeHtml(r.title)}</span><span class="t-art">${escapeHtml(r.artist)}</span>`
-      : `<span class="t-title">${escapeHtml(r.title)}</span>`;
+    const titleBlock = discoverPlaylistTitleCellHtml(r);
     tr.innerHTML = `
       <td class="col-idx">${i + 1}</td>
       <td class="col-cover">${coverHtml}</td>
@@ -2676,6 +2811,7 @@ async function fetchSearchPage() {
     const res = await invoke("search_songs", { keyword: kw, page: searchState.page });
     searchState.results = res.results || [];
     searchState.hasNext = !!res.has_next;
+    await refreshDownloadedSourceIdSet();
     renderSearchTable();
   } catch (e) {
     warnRequestFailed(e, "search_songs");
@@ -2940,6 +3076,11 @@ async function refreshDownloadedSongsTable() {
   try {
     const rows = await invoke("list_downloaded_songs");
     downloadedSongsRows = Array.isArray(rows) ? rows : [];
+    downloadedSourceIds = new Set(
+      downloadedSongsRows
+        .map((r) => String(r.pjmp3SourceId ?? r.pjmp3_source_id ?? "").trim())
+        .filter(Boolean),
+    );
     tbody.innerHTML = "";
     if (!downloadedSongsRows.length) {
       setTableMutedMessage(tbody, 4, "暂无记录。成功下载的歌曲会出现在这里（重启后仍会保留）。");
@@ -2969,6 +3110,7 @@ async function refreshDownloadedSongsTable() {
     warnRequestFailed(e, "list_downloaded_songs");
     setTableMutedMessage(tbody, 4, MSG_REQUEST_FAILED);
     downloadedSongsRows = [];
+    downloadedSourceIds = new Set();
   }
 }
 
@@ -3147,6 +3289,8 @@ async function playFromQueueIndex(idx) {
   const a = audioEl();
   /** 在线且最终走直链时写入最近播放，供下次「播放记录试听链接」优先 */
   let onlineResolvedPlayUrl = null;
+  /** @type {Record<string, unknown> | null} */
+  let playLogExtra = null;
   try {
     let assetUrl;
     if (item.local_path) {
@@ -3167,6 +3311,7 @@ async function playFromQueueIndex(idx) {
         return;
       }
       assetUrl = convertFileSrc(item.local_path);
+      playLogExtra = { local: true };
     } else {
       let songId = (item.source_id || "").trim();
       const iPl = item.import_playlist_id;
@@ -3208,7 +3353,7 @@ async function playFromQueueIndex(idx) {
         alert("无法匹配曲库 id。请在「发现」中搜索该曲，或确认歌名/歌手是否正确。");
         return;
       }
-      /** 后端顺序：本地曲库 songs → 下载目录同名文件 → 试听缓存 → 最近播放直链 → 拉取试听/直链 */
+      /** 后端顺序：本地曲库 songs → 下载记录(曲库id) → 下载目录同名文件 → 试听缓存 → 最近播放直链 → 拉取试听/直链 */
       const resolveRetryBudgetMs = 5000;
       const resolveRetryGapMs = 200;
       const resolveT0 = Date.now();
@@ -3244,8 +3389,17 @@ async function playFromQueueIndex(idx) {
       } else {
         throw new Error("resolve_online_play: 无效结果");
       }
+      playLogExtra = {
+        sid: songId,
+        kind: resolved.kind,
+        via: resolved.via,
+      };
     }
     if (generation !== playLoadGeneration) return;
+    await logPlayEventDesktop("play_start", {
+      url: assetUrl,
+      extra: playLogExtra,
+    });
     a.pause();
     a.removeAttribute("src");
     a.load();
@@ -3363,10 +3517,41 @@ function wireAudio() {
     syncSeekUi();
     void syncDesktopLyrics();
   });
-  a.addEventListener("loadedmetadata", () => syncSeekUi());
+  a.addEventListener("loadedmetadata", () => {
+    syncSeekUi();
+    if (audioSourceGeneration === playLoadGeneration) {
+      void logPlayEventDesktop("audio_loadedmetadata", {
+        url: a.src || null,
+        extra: audioDiagPayload(a),
+      });
+    }
+  });
   a.addEventListener("durationchange", () => syncSeekUi());
   a.addEventListener("canplay", () => syncSeekUi());
+  a.addEventListener("progress", () => {
+    if (audioSourceGeneration !== playLoadGeneration) return;
+    const now = Date.now();
+    if (now - audioProgressLogLastTs < 1000) return;
+    audioProgressLogLastTs = now;
+    void logPlayEventDesktop("audio_progress", {
+      url: a.src || null,
+      extra: audioDiagPayload(a),
+    });
+  });
+  a.addEventListener("stalled", () => {
+    if (audioSourceGeneration !== playLoadGeneration) return;
+    void logPlayEventDesktop("audio_stalled", {
+      url: a.src || null,
+      extra: audioDiagPayload(a),
+    });
+  });
   a.addEventListener("ended", () => {
+    if (audioSourceGeneration === playLoadGeneration) {
+      void logPlayEventDesktop("audio_ended", {
+        url: a.src || null,
+        extra: audioDiagPayload(a),
+      });
+    }
     const n = playQueue.length;
     const mode = PLAY_MODES[playModeIndex].key;
     if (!n) {
@@ -3404,8 +3589,13 @@ function wireAudio() {
     const err = a.error;
     if (err && err.code === 1) return;
     if (audioSourceGeneration !== playLoadGeneration) return;
+    void logPlayEventDesktop("audio_error", {
+      url: a.src || null,
+      error_code: err ? err.code : null,
+      message: err && err.message ? err.message : null,
+      extra: audioDiagPayload(a),
+    });
     const sub = document.getElementById("dock-sub");
-    const cur = playQueue[playIndex];
     if (sub && err) {
       sub.textContent = MSG_REQUEST_FAILED;
     }
@@ -3687,6 +3877,13 @@ function bootDesktop() {
       downloadTasksBySourceId.set(String(sid), p);
     }
     renderDownloadTables();
+    void refreshDownloadedSourceIdSet().then(() => {
+      renderSearchTable();
+      if (playlistDetailRows.length) {
+        renderPlaylistDetailTable();
+        renderPlaylistBatchTable();
+      }
+    });
   });
   listen("desktop-lyrics-request-lock", async (e) => {
     const locked = e?.payload?.locked;
