@@ -9,12 +9,6 @@ import {
   saveLikedSet,
 } from "./utils.js";
 import {
-  closeContextMenu,
-  buildAddToSubmenu,
-  mountContextMenuAt,
-  cmBtn,
-} from "./context-menu.js";
-import {
   refreshLyricsLockMenuLabel,
   broadcastDesktopLyricsLock,
   toggleDesktopLyrics,
@@ -49,6 +43,46 @@ function toggleDockMenu(menuEl) {
   const willOpen = menuEl.hidden;
   closeAllDockMenus();
   menuEl.hidden = !willOpen;
+}
+
+async function openAddToPlaylistModal() {
+  const modal = document.getElementById("add-to-playlist-modal");
+  const trackEl = document.getElementById("add-to-pl-track");
+  const listEl = document.getElementById("add-to-pl-list");
+  if (!modal || !listEl) return;
+  const cur = appState.playQueue[appState.playIndex];
+  if (!cur) return;
+  if (trackEl) trackEl.textContent = `${cur.title || "—"}${cur.artist ? ` — ${cur.artist}` : ""}`;
+  listEl.innerHTML = "";
+  const pls = await listPlaylistsCached();
+  if (!pls.length) {
+    const li = document.createElement("li");
+    li.className = "add-to-pl-empty";
+    li.textContent = "暂无歌单，请先新建";
+    listEl.appendChild(li);
+  } else {
+    for (const p of pls) {
+      const pid = p.id;
+      if (pid == null) continue;
+      const name = (p.name || "").trim() || `#${pid}`;
+      const li = document.createElement("li");
+      li.textContent = name;
+      li.addEventListener("click", async () => {
+        try {
+          await invoke("append_playlist_import_items", {
+            playlistId: pid,
+            items: [buildPlaylistImportItem({ title: cur.title, artist: cur.artist || "", album: cur.album || "", sourceId: cur.source_id, coverUrl: cur.cover_url || "" })],
+          });
+          li.classList.add("is-added");
+          await _deps.refreshSidebarPlaylists();
+        } catch (err) {
+          alertRequestFailed(err, "append_playlist_import_items");
+        }
+      });
+      listEl.appendChild(li);
+    }
+  }
+  modal.hidden = false;
 }
 
 export function wireDockBar() {
@@ -146,40 +180,7 @@ export function wireDockBar() {
   document.querySelector('[data-more="add-pl"]')?.addEventListener("click", async (e) => {
     e.stopPropagation();
     closeAllDockMenus();
-    const cur = appState.playQueue[appState.playIndex];
-    if (!cur) return;
-    const pls = await listPlaylistsCached();
-    const root = document.createElement("div");
-    const { addRow, fly, sub } = buildAddToSubmenu({
-      title: cur.title,
-      artist: cur.artist,
-      album: cur.album,
-      sourceId: cur.source_id,
-      coverUrl: cur.cover_url,
-    });
-    let any = false;
-    for (const p of pls) {
-      const pid = p.id;
-      if (pid == null) continue;
-      any = true;
-      const name = (p.name || "").trim() || `#${pid}`;
-      sub.appendChild(
-        cmBtn(name, async () => {
-          await invoke("append_playlist_import_items", {
-            playlistId: pid,
-            items: [buildPlaylistImportItem({ title: cur.title, artist: cur.artist || "", album: cur.album || "", sourceId: cur.source_id, coverUrl: cur.cover_url || "" })],
-          });
-          await _deps.refreshSidebarPlaylists();
-        })
-      );
-    }
-    if (!any) sub.appendChild(cmBtn("（暂无其它歌单）", () => {}, true));
-    addRow.appendChild(fly);
-    addRow.appendChild(sub);
-    root.appendChild(addRow);
-    const btnEl = e.currentTarget;
-    const rect = btnEl.getBoundingClientRect();
-    mountContextMenuAt(rect.right, rect.top, root);
+    await openAddToPlaylistModal();
   });
 
   // 更多菜单 → 从播放列表删除
@@ -236,6 +237,39 @@ export function wireDockBar() {
   document.addEventListener("click", (e) => {
     if (e.target.closest(".dock-menu-anchor") || e.target.closest(".dock-menu")) return;
     closeAllDockMenus();
+  });
+
+  // 添加到歌单弹窗
+  const addToPlModal = document.getElementById("add-to-playlist-modal");
+  document.getElementById("add-to-pl-cancel")?.addEventListener("click", () => {
+    if (addToPlModal) addToPlModal.hidden = true;
+  });
+  addToPlModal?.addEventListener("click", (e) => {
+    if (e.target === addToPlModal) addToPlModal.hidden = true;
+  });
+  document.getElementById("add-to-pl-new")?.addEventListener("click", async () => {
+    const name = window.prompt("歌单名称", "新歌单");
+    if (!name || !name.trim()) return;
+    const cur = appState.playQueue[appState.playIndex];
+    if (!cur) return;
+    try {
+      const pid = await invoke("create_playlist", { name: name.trim() });
+      await invoke("append_playlist_import_items", {
+        playlistId: pid,
+        items: [buildPlaylistImportItem({ title: cur.title, artist: cur.artist || "", album: cur.album || "", sourceId: cur.source_id, coverUrl: cur.cover_url || "" })],
+      });
+      await _deps.refreshSidebarPlaylists();
+      if (addToPlModal) addToPlModal.hidden = true;
+    } catch (err) {
+      alertRequestFailed(err, "create_playlist");
+    }
+  });
+  document.addEventListener("keydown", (e) => {
+    if (!addToPlModal || addToPlModal.hidden) return;
+    if (e.key === "Escape") {
+      e.preventDefault();
+      addToPlModal.hidden = true;
+    }
   });
 
   wireLyricsReplaceModal();

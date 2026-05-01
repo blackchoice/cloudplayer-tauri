@@ -1422,6 +1422,22 @@ body {
   color: #e11d48;
 }
 
+.dock-ic--svg {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.dock-ic--svg svg {
+  display: block;
+  flex-shrink: 0;
+}
+
+#btn-dock-fav {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .dock-ic--accent {
   font-weight: 700;
   color: var(--dock-accent);
@@ -2204,6 +2220,50 @@ body {
 
 .modal-cancel:hover {
   background: rgba(0, 0, 0, 0.05);
+}
+
+/* —— 添加到歌单弹窗 —— */
+.modal-dialog--add-to-pl {
+  width: min(380px, 100%);
+  max-height: min(80vh, 480px);
+  display: flex;
+  flex-direction: column;
+}
+.add-to-pl-list-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 12px 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.add-to-pl-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+}
+.add-to-pl-list li {
+  padding: 8px 14px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.12s;
+}
+.add-to-pl-list li:hover {
+  background: rgba(198, 47, 47, 0.08);
+}
+.add-to-pl-list li.is-added {
+  color: var(--text-secondary);
+  pointer-events: none;
+}
+.add-to-pl-list li.is-added::after {
+  content: " ✓";
+  color: var(--accent);
+}
+.add-to-pl-empty {
+  padding: 24px 14px;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 13px;
 }
 
 .btn-outline {

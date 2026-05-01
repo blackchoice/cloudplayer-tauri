@@ -519,7 +519,7 @@
                   <button type="button" class="dock-menu__item" data-more="rm-queue">从播放列表删除</button>
                 </div>
               </div>
-              <button type="button" id="btn-dock-settings" class="dock-ic" title="偏好设置" aria-label="偏好设置">🔧</button>
+              <button type="button" id="btn-dock-settings" class="dock-ic dock-ic--svg" title="偏好设置" aria-label="偏好设置"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="16" height="16" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><circle cx="12" cy="12" r="3" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/></svg></button>
             </div>
           </div>
         </div>
@@ -692,6 +692,19 @@
             ><input type="checkbox" id="close-choice-remember" /> 将此次选择记录为默认</label
           >
           <button type="button" class="modal-cancel" id="close-choice-cancel">取消</button>
+        </div>
+      </div>
+      <div id="add-to-playlist-modal" class="modal-overlay" hidden aria-hidden="true">
+        <div class="modal-dialog modal-dialog--add-to-pl" role="dialog" aria-modal="true" aria-labelledby="add-to-pl-title">
+          <h3 id="add-to-pl-title" class="modal-title">添加到歌单</h3>
+          <p id="add-to-pl-track" class="modal-desc"></p>
+          <div class="add-to-pl-list-wrap">
+            <ul id="add-to-pl-list" class="add-to-pl-list"></ul>
+          </div>
+          <div class="modal-actions modal-actions--row modal-actions--end">
+            <button type="button" class="btn-outline" id="add-to-pl-cancel">取消</button>
+            <button type="button" class="btn-accent" id="add-to-pl-new">新建歌单</button>
+          </div>
         </div>
       </div>
     </div>

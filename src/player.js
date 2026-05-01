@@ -64,10 +64,11 @@ export function renderQueuePanel() {
 export function refreshFavButton() {
   const btn = document.getElementById("btn-dock-fav");
   if (!btn) return;
+  const svgHeart = (filled) => `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" style="display:block"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z" fill="${filled ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="${filled ? '0' : '1.5'}"/></svg>`;
   const cur = appState.playQueue[appState.playIndex];
   if (!cur) {
     btn.classList.remove("is-on");
-    btn.textContent = "♡";
+    btn.innerHTML = svgHeart(false);
     btn.disabled = false;
     btn.title = "喜欢";
     return;
@@ -78,7 +79,7 @@ export function refreshFavButton() {
   btn.title = canFav ? "喜欢" : "本地文件无曲库 id，不支持喜欢";
   const on = canFav && appState.likedIds.has(sid);
   btn.classList.toggle("is-on", on);
-  btn.textContent = on ? "♥" : "♡";
+  btn.innerHTML = svgHeart(on);
 }
 
 // ── Player Chrome ──

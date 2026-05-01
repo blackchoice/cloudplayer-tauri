@@ -82,7 +82,6 @@ export function lyricDisplayForDesktop(ct) {
     else break;
   }
   const curLine = appState.lrcEntries[idx];
-  const prevLine = idx > 0 ? appState.lrcEntries[idx - 1] : null;
   const nextLine = appState.lrcEntries[idx + 1];
   const startT = curLine?.t ?? 0;
   const endT = nextLine ? nextLine.t : startT + 4;
@@ -101,12 +100,15 @@ export function lyricDisplayForDesktop(ct) {
       audioNow: t,
     };
   }
-  const line1 = prevLine?.text || " ";
   const line2 = curLine?.text || "—";
+  const line1 = nextLine?.text || " ";
+  const nextNextLine = appState.lrcEntries[idx + 2];
+  const line1EndT = nextNextLine ? nextNextLine.t : endT + 4;
   return {
     line1, line2, activeSlot: 2,
-    line1StartT: prevLine?.t ?? 0, line1EndT: startT, line2StartT: startT, line2EndT: endT,
-    line1Words: prevLine ? wl?.[idx - 1] ?? null : null,
+    line1StartT: endT, line1EndT,
+    line2StartT: startT, line2EndT: endT,
+    line1Words: nextLine ? wl?.[idx + 1] ?? null : null,
     line2Words: wl?.[idx] ?? null,
     audioNow: t,
   };
