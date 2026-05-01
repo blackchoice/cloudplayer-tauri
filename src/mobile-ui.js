@@ -5,6 +5,13 @@ import {
   triggerBlobDownload,
 } from "./export-playlist.js";
 import { convertFileSrc, invoke as invokeTauri } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import {
+  mediaNotifUpdate,
+  mediaNotifSetState,
+  mediaNotifClear,
+  mediaNotifRequestPermission,
+} from "./mobile-media-notif.js";
 
 /** 是否在 Tauri WebView 内（浏览器 ?cp_mobile=1 预览时无 IPC） */
 function hasTauriIpc() {
@@ -200,9 +207,208 @@ let playQueue = [];
 let playIndex = 0;
 let playLoadGeneration = 0;
 let audioSourceGeneration = 0;
+/** 取消进行中的预解析任务 */
+let prefetchJobId = 0;
+/** 当前曲播放期间预解析的下一首（自动切歌时命中则跳过 resolve） @type {null | { listeningGen: number; fromIdx: number; nextIdx: number; songId: string; resolved: { kind: string; url?: string; path?: string; via?: string } }} */
+let prefetchedNextPlay = null;
+let prefetchNearEndLastTs = 0;
+let lastAutoRetryTrackIdx = -1;
+let lastAutoRetryAt = 0;
 let seekDragging = false;
 /** `progress` 上报节流：最多每秒一条 */
 let audioProgressLogLastTs = 0;
+
+/** 与桌面 `PLAY_MODES` 一致：序 → 循 → 单 → 随（移动端用图标，文案见 tip） */
+const PLAY_MODES = [
+  { key: "sequential", label: "序", tip: "顺序播放（点击切换模式）" },
+  { key: "loop_list", label: "循", tip: "列表循环" },
+  { key: "one", label: "单", tip: "单曲循环" },
+  { key: "shuffle", label: "随", tip: "随机播放" },
+];
+
+/** 播放顺序按钮内图标（stroke 继承 currentColor，适配深浅底） */
+function playModeIconInnerHtml(modeKey) {
+  const S = `<svg class="cp-m-play-mode-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">`;
+  switch (modeKey) {
+    case "sequential":
+      /* 列表 + 前进：顺序播放 */
+      return `${S}<path d="M4 6h11"/><path d="M4 12h9"/><path d="M4 18h11"/><path d="M17 8l4 4-4 4"/></svg>`;
+    case "loop_list":
+      /* 双箭头环：列表循环 */
+      return `${S}<path d="M17 2.3L21 6l-3.8 3.8"/><path d="M3 11.2V10A7 7 0 0110 3h11"/><path d="M7 21.7 3 18l3.8-3.8"/><path d="M21 12.8V14a7 7 0 01-7 7H3"/></svg>`;
+    case "one":
+      /* 循环 + 1：单曲循环 */
+      return `${S}<path d="M17 2.3L21 6l-3.8 3.8"/><path d="M3 11.2V10A7 7 0 0110 3h11"/><path d="M7 21.7 3 18l3.8-3.8"/><path d="M21 12.8V14a7 7 0 01-7 7H3"/><text x="12" y="16.2" font-size="7.5" fill="currentColor" stroke="none" text-anchor="middle" font-weight="700">1</text></svg>`;
+    case "shuffle":
+      /* 双向交叉箭头：随机 */
+      return `${S}<path d="M7.5 20.5 3 16m0 0 4.5-4.5M3 16h11.5a4 4 0 003.9-3.1"/><path d="M16.5 3.5 21 8m0 0-4.5 4.5M21 8H9.5a4 4 0 00-3.9 3.1"/></svg>`;
+    default:
+      return `${S}<path d="M4 6h16"/><path d="M4 12h12"/><path d="M4 18h16"/></svg>`;
+  }
+}
+
+function loadPlayModeIndex() {
+  try {
+    const v = Number(localStorage.getItem("cp_m_play_mode_idx"));
+    if (Number.isFinite(v) && v >= 0 && v < PLAY_MODES.length) return v;
+  } catch {
+    /* ignore */
+  }
+  return 0;
+}
+
+let playModeIndex = loadPlayModeIndex();
+
+/** 自动下一首：略推迟再解析，减轻 Android 上「ended 后立即请求」导致的瞬时 DNS 失败 */
+const MOBILE_AUTO_NEXT_DELAY_MS = 260;
+let mobileAudioEndedAt = 0;
+
+function schedulePlayFromQueueIndex(idx) {
+  window.setTimeout(() => {
+    void playFromQueueIndex(idx);
+  }, MOBILE_AUTO_NEXT_DELAY_MS);
+}
+
+function randomNextIndex() {
+  const n = playQueue.length;
+  if (n <= 1) return 0;
+  let j = playIndex;
+  let guard = 0;
+  while (j === playIndex && guard++ < 12) {
+    j = Math.floor(Math.random() * n);
+  }
+  return j;
+}
+
+function invalidateMobilePrefetch() {
+  prefetchJobId += 1;
+  prefetchedNextPlay = null;
+}
+
+/** @returns {number | null} */
+function computePrefetchNextIndex(fromIdx, n, modeKey) {
+  if (n < 2) return null;
+  if (modeKey === "one") return null;
+  if (modeKey === "loop_list") return (fromIdx + 1) % n;
+  if (modeKey === "shuffle") return randomNextIndex();
+  if (fromIdx >= n - 1) return null;
+  return fromIdx + 1;
+}
+
+async function resolveOnlinePlayWithRetryMobile(songId, title, artist, isStale, opts = {}) {
+  const skipRecentUrl = !!opts.skipRecentUrl;
+  const resolveRetryBudgetMs = 22_000;
+  let resolveBackoffMs = 280;
+  const resolveT0 = Date.now();
+  let lastErr = null;
+  for (;;) {
+    if (isStale()) return { ok: false, cancelled: true, lastErr };
+    if (Date.now() - resolveT0 >= resolveRetryBudgetMs) break;
+    try {
+      const resolved = await invoke("resolve_online_play", {
+        songId,
+        title: title || "",
+        artist: artist || "",
+        skipRecentUrl,
+      });
+      return { ok: true, resolved };
+    } catch (e) {
+      lastErr = e;
+      if (Date.now() - resolveT0 >= resolveRetryBudgetMs) break;
+      const wait = Math.min(resolveBackoffMs, resolveRetryBudgetMs - (Date.now() - resolveT0));
+      resolveBackoffMs = Math.min(Math.floor(resolveBackoffMs * 1.45), 2800);
+      if (wait > 0) {
+        await new Promise((r) => setTimeout(r, wait));
+      }
+    }
+  }
+  return { ok: false, cancelled: false, lastErr };
+}
+
+function prefetchPayloadMatchesQueue(pf, idx, item) {
+  if (!pf || pf.nextIdx !== idx) return false;
+  const sid = (item.source_id || "").trim();
+  if (sid && sid !== pf.songId) return false;
+  return true;
+}
+
+async function runPrefetchNextTrack() {
+  const myJob = prefetchJobId;
+  const n = playQueue.length;
+  const fromIdx = playIndex;
+  const listeningGen = playLoadGeneration;
+  const modeKey = PLAY_MODES[playModeIndex].key;
+  const nextIdx = computePrefetchNextIndex(fromIdx, n, modeKey);
+  if (nextIdx == null || nextIdx < 0 || nextIdx >= n) {
+    prefetchedNextPlay = null;
+    return;
+  }
+  let item = playQueue[nextIdx];
+  if (!item) return;
+  if (item.local_path) {
+    prefetchedNextPlay = null;
+    return;
+  }
+  let songId = (item.source_id || "").trim();
+  const iPl = item.import_playlist_id;
+  const iRow = item.import_item_id;
+  if (!songId && iPl != null && iRow != null) {
+    try {
+      const filled = await invoke("try_fill_playlist_item_source_id", {
+        playlistId: iPl,
+        itemId: iRow,
+      });
+      if (myJob !== prefetchJobId || listeningGen !== playLoadGeneration || fromIdx !== playIndex) return;
+      if (filled && String(filled).trim()) {
+        const fid = String(filled).trim();
+        songId = fid;
+        playQueue[nextIdx] = { ...playQueue[nextIdx], source_id: fid };
+        item = playQueue[nextIdx];
+        const match = playlistDetailRows.find((row) => Number(row.id) === Number(iRow));
+        if (match) match.pjmp3_source_id = fid;
+        patchPlaylistDetailRowAfterFill(Number(iRow), fid);
+      }
+    } catch (e) {
+      console.warn("prefetch try_fill", e);
+    }
+  }
+  if (myJob !== prefetchJobId || listeningGen !== playLoadGeneration || fromIdx !== playIndex) return;
+  if (!songId) return;
+  const r = await resolveOnlinePlayWithRetryMobile(songId, item.title, item.artist, () => {
+    return myJob !== prefetchJobId || listeningGen !== playLoadGeneration || fromIdx !== playIndex;
+  });
+  if (!r.ok || r.cancelled || !r.resolved) return;
+  if (myJob !== prefetchJobId || listeningGen !== playLoadGeneration || fromIdx !== playIndex) return;
+  const res = r.resolved;
+  if ((res.kind !== "url" || !res.url) && (res.kind !== "file" || !res.path)) return;
+  prefetchedNextPlay = {
+    listeningGen,
+    fromIdx,
+    nextIdx,
+    songId,
+    resolved: res,
+  };
+}
+
+function maybePrefetchNextNearEnd(a) {
+  if (prefetchedNextPlay) return;
+  if (playQueue.length < 2) return;
+  const mode = PLAY_MODES[playModeIndex].key;
+  if (mode === "one") return;
+  const dur = a.duration;
+  if (!Number.isFinite(dur) || dur <= 0) return;
+  if (dur - a.currentTime > 22) return;
+  const now = Date.now();
+  if (now - prefetchNearEndLastTs < 10_000) return;
+  prefetchNearEndLastTs = now;
+  void runPrefetchNextTrack();
+}
+
+/** 下载品质面板：非空时整单下载（优先于多选） @type {any[] | null} */
+let pendingDownloadRows = null;
+
+/** 「添加到歌单」面板：整单打开时固定行集（否则用多选） @type {any[] | null} */
+let addToPanelPinnedRows = null;
 
 /** @type {{ id: number; name: string } | null} */
 let openPlaylistCtx = null;
@@ -224,6 +430,118 @@ let searchRowLongPressTimer = 0;
 let searchRowLongPressSuppressClick = false;
 
 const DETAIL_LONG_MS = 520;
+
+// ─── Android 物理返回键统一处理 ────────────────────────────────────────────
+function androidBackInternal() {
+  const addTo = document.getElementById("cp-m-addto-panel");
+  if (addTo && !addTo.classList.contains("hidden")) { closeAddToPanel(); return true; }
+  const dlQ = document.getElementById("cp-m-dl-quality-panel");
+  if (dlQ && !dlQ.classList.contains("hidden")) { closeDlQualityPanel(); return true; }
+  const imp = document.getElementById("cp-m-import-panel");
+  if (imp && !imp.classList.contains("hidden")) { closeImportPanel(); return true; }
+  const sp = document.getElementById("cp-m-search-panel");
+  if (sp && !sp.classList.contains("hidden")) {
+    if (searchSelectMode) exitSearchSelectMode();
+    else closeSearchPanel();
+    return true;
+  }
+  const sheet = document.getElementById("cp-m-queue-sheet");
+  if (sheet && !sheet.classList.contains("hidden")) { closeQueueSheet(); return true; }
+  const page = document.getElementById("cp-m-np-page");
+  if (page && !page.classList.contains("hidden")) { closeNowPlayingPage(); return true; }
+  if (detailSelectMode) { exitDetailSelectMode(); return true; }
+  const detail = document.getElementById("cp-m-pl-detail");
+  if (detail && !detail.classList.contains("hidden")) { closePlaylistDetail(); return true; }
+  return false;
+}
+window.__cpAndroidBack = () => androidBackInternal();
+
+// ─── 媒体通知回调（Android MediaSession → JS） ───────────────────────────
+let mediaNotifPermissionRequested = false;
+window.__cpMediaCb = (cmd) => {
+  if (cmd === "play" || cmd === "pause") {
+    const a = audioEl();
+    if (!a || !a.src) return;
+    if (a.paused) a.play().catch(() => {});
+    else a.pause();
+  } else if (cmd === "next") {
+    const n = playQueue.length;
+    if (!n) return;
+    const mode = PLAY_MODES[playModeIndex].key;
+    if (mode === "shuffle") { void playFromQueueIndex(randomNextIndex()); return; }
+    if (mode === "loop_list" && playIndex === n - 1) { void playFromQueueIndex(0); return; }
+    if (playIndex < n - 1) void playFromQueueIndex(playIndex + 1);
+  } else if (cmd === "prev") {
+    const n = playQueue.length;
+    if (!n) return;
+    const mode = PLAY_MODES[playModeIndex].key;
+    if (mode === "shuffle") { void playFromQueueIndex((playIndex - 1 + n) % n); return; }
+    if (mode === "loop_list" && playIndex === 0) { void playFromQueueIndex(n - 1); return; }
+    if (playIndex > 0) void playFromQueueIndex(playIndex - 1);
+  } else if (typeof cmd === "string" && cmd.startsWith("seek:")) {
+    const ms = parseInt(cmd.slice(5), 10);
+    if (!isNaN(ms)) {
+      const a = audioEl();
+      if (a) a.currentTime = ms / 1000;
+    }
+  } else if (cmd === "stop") {
+    const a = audioEl();
+    if (a) { a.pause(); a.currentTime = 0; }
+  }
+};
+
+// ─── 歌单自动补全监听 ─────────────────────────────────────────────────────
+let mobileEnrichListenersWired = false;
+let enrichRefreshTimer = 0;
+
+function scheduleEnrichRefresh() {
+  clearTimeout(enrichRefreshTimer);
+  enrichRefreshTimer = setTimeout(async () => {
+    if (!openPlaylistCtx) return;
+    try {
+      const rows = await invoke("list_playlist_import_items", { playlistId: openPlaylistCtx.id });
+      playlistDetailRows = rows;
+      const ul = document.getElementById("cp-m-pl-tracks-ul");
+      if (!ul) return;
+      const lis = ul.querySelectorAll("li.cp-m-pl-track");
+      rows.forEach((r, i) => {
+        const li = lis[i];
+        if (!li) return;
+        const sid = (r.pjmp3_source_id || "").trim();
+        const sub = li.querySelector(".cp-m-li-sub");
+        if (sub) sub.textContent = r.artist || "";
+        if (sid) {
+          li.style.opacity = "";
+          const txt = sub?.textContent || "";
+          if (txt.includes("无曲库 id")) sub.textContent = txt.replace(/ · 无曲库 id$/, "");
+        }
+      });
+      const missing = rows.filter((r) => !(r.pjmp3_source_id || "").trim()).length;
+      const heroSub = document.getElementById("cp-m-pl-hero-sub");
+      if (heroSub) {
+        heroSub.textContent = missing > 0
+          ? `共 ${rows.length} 首 · 自动补全中 (${missing} 待处理)`
+          : `共 ${rows.length} 首导入曲目`;
+      }
+    } catch (_) {}
+  }, 300);
+}
+
+function wireEnrichListeners() {
+  if (mobileEnrichListenersWired || !hasTauriIpc()) return;
+  mobileEnrichListenersWired = true;
+  listen("import-enrich-item-done", (e) => {
+    if (!openPlaylistCtx) return;
+    if (e.payload?.playlistId === openPlaylistCtx.id) scheduleEnrichRefresh();
+  });
+  listen("import-enrich-finished", async (e) => {
+    if (!openPlaylistCtx) return;
+    if (e.payload?.playlistId === openPlaylistCtx.id) {
+      clearTimeout(enrichRefreshTimer);
+      await openPlaylistDetail(openPlaylistCtx.id, openPlaylistCtx.name);
+    }
+  });
+}
 
 function loadLikedSet() {
   try {
@@ -268,6 +586,95 @@ function setChrome({ title, sub, coverUrl }) {
   if (sub !== undefined && s) s.textContent = sub;
   if (coverUrl && c) c.src = coverUrl;
   else if (c && coverUrl === null) c.src = PLACEHOLDER_COVER;
+
+  // 同步 Now Playing 页（标题 / 歌手 / 封面 / 背景模糊图）
+  const npTitle = document.getElementById("cp-m-np-title");
+  const npArtist = document.getElementById("cp-m-np-artist");
+  const npCover = document.getElementById("cp-m-np-cover");
+  const npBg = document.getElementById("cp-m-np-bg");
+  if (title !== undefined && npTitle) npTitle.textContent = title;
+  if (sub !== undefined && npArtist) npArtist.textContent = sub;
+  if (coverUrl) {
+    if (npCover) npCover.src = coverUrl;
+    if (npBg) {
+      npBg.style.backgroundImage = `url("${String(coverUrl).replace(/"/g, '\\"')}")`;
+      npBg.classList.add("has-cover");
+    }
+  } else if (coverUrl === null) {
+    if (npCover) npCover.src = PLACEHOLDER_COVER;
+    if (npBg) {
+      npBg.style.backgroundImage = "";
+      npBg.classList.remove("has-cover");
+    }
+  }
+}
+
+/** 同步 mini-player 与 Now Playing 页两套播放按钮的图标 */
+function syncPlayBtnUi() {
+  const a = audioEl();
+  if (!a) return;
+  const label = a.paused ? "▶" : "⏸";
+  const btn = document.getElementById("cp-m-play");
+  const btn2 = document.getElementById("cp-m-np-play");
+  if (btn) btn.textContent = label;
+  if (btn2) btn2.textContent = label;
+}
+
+function syncPlayModeUi() {
+  const m = PLAY_MODES[playModeIndex];
+  const iconHtml = playModeIconInnerHtml(m.key);
+  for (const id of ["cp-m-queue-play-mode", "cp-m-np-play-mode"]) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    el.innerHTML = iconHtml;
+    el.title = m.tip;
+    el.setAttribute("aria-label", m.tip);
+  }
+}
+
+function cyclePlayMode() {
+  playModeIndex = (playModeIndex + 1) % PLAY_MODES.length;
+  try {
+    localStorage.setItem("cp_m_play_mode_idx", String(playModeIndex));
+  } catch {
+    /* ignore */
+  }
+  invalidateMobilePrefetch();
+  syncPlayModeUi();
+  syncMobilePlayerNav();
+  void runPrefetchNextTrack();
+}
+
+/** 与桌面 `setPlayerNavEnabled` 一致：上一首 / 下一首是否可点 */
+function syncMobilePlayerNav() {
+  const prevDock = document.getElementById("cp-m-prev");
+  const nextDock = document.getElementById("cp-m-next");
+  const prevNp = document.getElementById("cp-m-np-prev");
+  const nextNp = document.getElementById("cp-m-np-next");
+  const n = playQueue.length;
+  const mode = PLAY_MODES[playModeIndex].key;
+  let disPrev = false;
+  let disNext = false;
+  if (!n) {
+    disPrev = true;
+    disNext = true;
+  } else if (mode === "loop_list" || mode === "shuffle") {
+    disPrev = false;
+    disNext = false;
+  } else if (mode === "one") {
+    const dis = n <= 1;
+    disPrev = dis;
+    disNext = dis;
+  } else {
+    disPrev = playIndex <= 0;
+    disNext = playIndex >= n - 1;
+  }
+  for (const el of [prevDock, prevNp]) {
+    el?.toggleAttribute("disabled", disPrev);
+  }
+  for (const el of [nextDock, nextNp]) {
+    el?.toggleAttribute("disabled", disNext);
+  }
 }
 
 function syncSeekUi() {
@@ -275,20 +682,40 @@ function syncSeekUi() {
   const seek = document.getElementById("cp-m-seek");
   const cur = document.getElementById("cp-m-time-cur");
   const tot = document.getElementById("cp-m-time-tot");
-  if (!a || !seek || !cur || !tot) return;
+  const seek2 = document.getElementById("cp-m-np-seek");
+  const cur2 = document.getElementById("cp-m-np-time-cur");
+  const tot2 = document.getElementById("cp-m-np-time-tot");
+  if (!a) return;
   const d = a.duration;
   if (d && Number.isFinite(d) && d > 0) {
-    tot.textContent = formatTime(d);
-    if (!seekDragging) {
-      seek.value = String(Math.min(1000, Math.floor((a.currentTime / d) * 1000)));
+    const totTxt = formatTime(d);
+    const curTxt = formatTime(a.currentTime);
+    const val = String(Math.min(1000, Math.floor((a.currentTime / d) * 1000)));
+    if (tot) tot.textContent = totTxt;
+    if (cur) cur.textContent = curTxt;
+    if (seek) {
+      if (!seekDragging) seek.value = val;
+      seek.disabled = false;
     }
-    cur.textContent = formatTime(a.currentTime);
-    seek.disabled = false;
+    if (tot2) tot2.textContent = totTxt;
+    if (cur2) cur2.textContent = curTxt;
+    if (seek2) {
+      if (!seekDragging) seek2.value = val;
+      seek2.disabled = false;
+    }
   } else {
-    cur.textContent = "0:00";
-    tot.textContent = "0:00";
-    seek.value = "0";
-    seek.disabled = !a.src;
+    if (cur) cur.textContent = "0:00";
+    if (tot) tot.textContent = "0:00";
+    if (seek) {
+      seek.value = "0";
+      seek.disabled = !a.src;
+    }
+    if (cur2) cur2.textContent = "0:00";
+    if (tot2) tot2.textContent = "0:00";
+    if (seek2) {
+      seek2.value = "0";
+      seek2.disabled = !a.src;
+    }
   }
 }
 
@@ -750,6 +1177,7 @@ async function refreshRecent() {
     img.referrerPolicy = "no-referrer";
     card.querySelector(".cp-m-recent-cover")?.appendChild(img);
     card.addEventListener("click", () => {
+      invalidateMobilePrefetch();
       playQueue = queue;
       void playFromQueueIndex(j);
     });
@@ -846,6 +1274,23 @@ function getSelectedRowsForBatch() {
   return getSelectedDetailRows();
 }
 
+/** 当前播放队列 → 与歌单导入行相近的结构，供整队「下载 / 添加到」 */
+function playQueueToBatchRows() {
+  return playQueue.map((it) => {
+    const sid = String(it.source_id ?? "").trim();
+    return {
+      title: it.title,
+      artist: it.artist || "",
+      album: it.album || "",
+      pjmp3_source_id: sid,
+      source_id: sid,
+      id: it.import_item_id != null ? it.import_item_id : null,
+      cover_url: it.cover_url,
+      import_playlist_id: it.import_playlist_id != null ? it.import_playlist_id : null,
+    };
+  });
+}
+
 function mapRowsToAppendItems(rows) {
   return rows.map((row) => ({
     title: row.title || "",
@@ -909,6 +1354,7 @@ function wirePlaylistDetailTrackRow(li, r, i, rows) {
     const pid = openPlaylistCtx?.id;
     if (pid == null) return;
     /** 与桌面 `openSidebarPlaylistContextMenu` / `playlistImportRowToQueueItem` 一致：可无 source_id，播放时 `try_fill` */
+    invalidateMobilePrefetch();
     playQueue = rows.map((row) => ({
       source_id: (row.pjmp3_source_id || "").trim(),
       title: row.title,
@@ -923,24 +1369,38 @@ function wirePlaylistDetailTrackRow(li, r, i, rows) {
 }
 
 function closeDlQualityPanel() {
+  pendingDownloadRows = null;
   document.getElementById("cp-m-dl-quality-panel")?.classList.add("hidden");
 }
 
-function openDlQualityPanel() {
+function hideDlQualityPanelOnly() {
+  document.getElementById("cp-m-dl-quality-panel")?.classList.add("hidden");
+}
+
+function openDlQualityPanel(rowsOverride = null) {
+  pendingDownloadRows = rowsOverride;
   document.getElementById("cp-m-dl-quality-panel")?.classList.remove("hidden");
 }
 
 function closeAddToPanel() {
+  addToPanelPinnedRows = null;
   document.getElementById("cp-m-addto-panel")?.classList.add("hidden");
 }
 
-async function openAddToPanel() {
+function getAddToPanelRows() {
+  return addToPanelPinnedRows != null ? addToPanelPinnedRows : getSelectedRowsForBatch();
+}
+
+async function openAddToPanel(opts = {}) {
   const panel = document.getElementById("cp-m-addto-panel");
   const ul = document.getElementById("cp-m-addto-ul");
   if (!panel || !ul) return;
-  const items = mapRowsToAppendItems(getSelectedRowsForBatch());
+  addToPanelPinnedRows = opts.rows != null ? opts.rows : null;
+  const rawRows = addToPanelPinnedRows != null ? addToPanelPinnedRows : getSelectedRowsForBatch();
+  const items = mapRowsToAppendItems(rawRows);
   if (!items.length) {
-    alert("请先选择曲目。");
+    addToPanelPinnedRows = null;
+    alert(opts.rows != null ? "没有可添加的曲目。" : "请先选择曲目。");
     return;
   }
   ul.innerHTML = "";
@@ -960,7 +1420,7 @@ async function openAddToPanel() {
     const li = document.createElement("li");
     li.textContent = String(p.name || "").trim() || `歌单 ${pid}`;
     li.addEventListener("click", async () => {
-      const batchItems = mapRowsToAppendItems(getSelectedRowsForBatch());
+      const batchItems = mapRowsToAppendItems(getAddToPanelRows());
       if (!batchItems.length) return;
       try {
         await invoke("append_playlist_import_items", { playlistId: pid, items: batchItems });
@@ -1008,22 +1468,31 @@ async function runDetailDelete() {
 }
 
 async function runBatchDownloadWithQuality(quality) {
-  closeDlQualityPanel();
-  const fromSearch = isSearchPanelActiveForBatch();
-  const rows = fromSearch ? getSelectedSearchRows() : getSelectedDetailRows();
+  const usePending = pendingDownloadRows != null;
+  const rows = usePending
+    ? pendingDownloadRows
+    : isSearchPanelActiveForBatch()
+      ? getSelectedSearchRows()
+      : getSelectedDetailRows();
+  const fromSearch = !usePending && isSearchPanelActiveForBatch();
+  pendingDownloadRows = null;
+  hideDlQualityPanelOnly();
   if (!rows.length) {
-    alert("请先选择曲目。");
+    alert(usePending ? "列表为空。" : "请先选择曲目。");
     return;
   }
-  const playlistId = openPlaylistCtx?.id;
   let ok = 0;
   let skip = 0;
   for (const r of rows) {
     let sid = fromSearch ? String(r.source_id ?? "").trim() : String(r.pjmp3_source_id ?? "").trim();
-    if (!fromSearch && !sid && r.id && playlistId) {
+    const playlistIdForFill =
+      r.import_playlist_id != null && Number.isFinite(Number(r.import_playlist_id))
+        ? Number(r.import_playlist_id)
+        : openPlaylistCtx?.id;
+    if (!fromSearch && !sid && r.id && playlistIdForFill) {
       try {
         const filled = await invoke("try_fill_playlist_item_source_id", {
-          playlistId,
+          playlistId: playlistIdForFill,
           itemId: r.id,
         });
         if (filled && String(filled).trim()) {
@@ -1115,7 +1584,15 @@ async function openPlaylistDetail(id, name) {
     };
   }
   if (heroTitle) heroTitle.textContent = name;
-  if (heroSub) heroSub.textContent = `共 ${rows.length} 首导入曲目`;
+  const missing = rows.filter((r) => !(r.pjmp3_source_id || "").trim()).length;
+  if (heroSub) {
+    heroSub.textContent = missing > 0
+      ? `共 ${rows.length} 首 · 自动补全中 (${missing} 待处理)`
+      : `共 ${rows.length} 首导入曲目`;
+  }
+  if (missing > 0 && hasTauriIpc()) {
+    try { await invoke("start_import_enrich", { playlistId: id }); } catch (_) {}
+  }
 
   rows.forEach((r, i) => {
     const li = document.createElement("li");
@@ -1183,6 +1660,7 @@ function wireSearchResultRow(li, r, i, results) {
       toggleSearchRowSelection(i, li);
       return;
     }
+    invalidateMobilePrefetch();
     playQueue = results.map((x) => ({
       source_id: x.source_id,
       title: x.title,
@@ -1224,18 +1702,33 @@ async function runDiscoverSearch() {
   }
 }
 
-async function playFromQueueIndex(idx) {
+async function playFromQueueIndex(idx, opts = {}) {
+  const forceRefresh = !!opts.forceRefresh;
   if (!playQueue.length || idx < 0 || idx >= playQueue.length) return;
+  const fromBefore = playIndex;
+  const genBefore = playLoadGeneration;
+  prefetchJobId += 1;
+  const pf = prefetchedNextPlay;
+  const usePrefetch =
+    !forceRefresh && pf && pf.nextIdx === idx && pf.fromIdx === fromBefore && pf.listeningGen === genBefore;
   const generation = ++playLoadGeneration;
+  prefetchedNextPlay = null;
+  /** @type {typeof pf | null} */
+  let prefetchedPayload = usePrefetch ? pf : null;
   revokeMobileAudioObjectUrl();
   playIndex = idx;
+  // 抽屉若已打开，则同步高亮当前曲目
+  const sheet = document.getElementById("cp-m-queue-sheet");
+  if (sheet && !sheet.classList.contains("hidden")) renderQueueSheet();
   let item = playQueue[idx];
+  if (prefetchedPayload && !prefetchPayloadMatchesQueue(prefetchedPayload, idx, item)) {
+    prefetchedPayload = null;
+  }
   setChrome({
     title: item.title,
     sub: item.local_path ? `${item.artist || ""} · 本地` : `${item.artist || ""} · 在线`,
     coverUrl: item.cover_url || null,
   });
-  const playBtn = document.getElementById("cp-m-play");
   const a = audioEl();
   /** 在线且最终走直链时写入最近播放，供 `resolve_online_play` 的 recent 分支 */
   let onlineResolvedPlayUrl = null;
@@ -1253,6 +1746,7 @@ async function playFromQueueIndex(idx) {
       playLogExtra = { local: true };
     } else {
       let songId = (item.source_id || "").trim();
+      if (!songId && prefetchedPayload?.songId) songId = prefetchedPayload.songId;
       const iPl = item.import_playlist_id;
       const iRow = item.import_item_id;
       if (!songId && iPl != null && iRow != null) {
@@ -1290,34 +1784,22 @@ async function playFromQueueIndex(idx) {
         alert("无法匹配曲库 id。请在「发现」中搜索该曲，或确认歌名/歌手是否正确。");
         return;
       }
-      /** 后端顺序：本地曲库 → 下载记录(曲库id) → 下载目录同名 → 试听缓存 → 最近播放直链 → 拉取试听/直链（与桌面相同重试） */
-      const resolveRetryBudgetMs = 5000;
-      const resolveRetryGapMs = 200;
-      const resolveT0 = Date.now();
       let resolved = null;
-      let lastErr = null;
-      for (;;) {
+      if (prefetchedPayload && prefetchedPayload.songId === songId) {
+        resolved = prefetchedPayload.resolved;
+      } else {
+        const r = await resolveOnlinePlayWithRetryMobile(songId, item.title, item.artist, () => {
+          return generation !== playLoadGeneration;
+        }, { skipRecentUrl: forceRefresh });
         if (generation !== playLoadGeneration) return;
-        if (Date.now() - resolveT0 >= resolveRetryBudgetMs) break;
-        try {
-          resolved = await invoke("resolve_online_play", {
-            songId,
-            title: item.title || "",
-            artist: item.artist || "",
-          });
-          lastErr = null;
-          break;
-        } catch (e) {
-          lastErr = e;
-          if (Date.now() - resolveT0 >= resolveRetryBudgetMs) break;
-          const wait = Math.min(resolveRetryGapMs, resolveRetryBudgetMs - (Date.now() - resolveT0));
-          if (wait > 0) {
-            await new Promise((r) => setTimeout(r, wait));
-          }
+        if (!r.ok) {
+          if (r.cancelled) return;
+          throw r.lastErr ?? new Error("resolve_online_play failed");
         }
+        resolved = r.resolved;
       }
       if (generation !== playLoadGeneration) return;
-      if (!resolved) throw lastErr ?? new Error("resolve_online_play failed");
+      if (!resolved) throw new Error("resolve_online_play failed");
       if (resolved.kind === "url" && resolved.url) {
         /** 仍记录直链，供 record_recent_play / 桌面端逻辑一致；与桌面 main.js 一致：直链赋给 `<audio>` */
         onlineResolvedPlayUrl = resolved.url;
@@ -1351,7 +1833,17 @@ async function playFromQueueIndex(idx) {
       sub: item.local_path ? `${item.artist || ""} · 本地` : `${item.artist || ""} · 在线`,
       coverUrl: item.cover_url || null,
     });
-    if (playBtn) playBtn.textContent = "⏸";
+    syncPlayBtnUi();
+    syncMobilePlayerNav();
+    prefetchNearEndLastTs = 0;
+    void runPrefetchNextTrack();
+    mediaNotifUpdate({
+      title: item.title,
+      artist: item.artist || "",
+      coverUrl: item.cover_url || null,
+      durationMs: a.duration ? Math.round(a.duration * 1000) : 0,
+    });
+    mediaNotifSetState({ playing: true, positionMs: 0 });
   } catch (e) {
     console.warn("playFromQueueIndex", e);
     setChrome({
@@ -1368,7 +1860,16 @@ function wirePlayer() {
   const playBtn = document.getElementById("cp-m-play");
   const seek = document.getElementById("cp-m-seek");
 
-  a.addEventListener("timeupdate", syncSeekUi);
+  let mediaNotifPosLastTs = 0;
+  a.addEventListener("timeupdate", () => {
+    syncSeekUi();
+    maybePrefetchNextNearEnd(a);
+    const now = Date.now();
+    if (now - mediaNotifPosLastTs >= 1000) {
+      mediaNotifPosLastTs = now;
+      mediaNotifSetState({ playing: !a.paused, positionMs: Math.round((a.currentTime || 0) * 1000) });
+    }
+  });
   a.addEventListener("loadedmetadata", () => {
     syncSeekUi();
     if (audioSourceGeneration === playLoadGeneration) {
@@ -1402,10 +1903,46 @@ function wirePlayer() {
         extra: audioDiagPayload(a),
       });
     }
-    if (playIndex < playQueue.length - 1) {
-      void playFromQueueIndex(playIndex + 1);
-    } else if (playBtn) {
-      playBtn.textContent = "▶";
+    const n = playQueue.length;
+    const mode = PLAY_MODES[playModeIndex].key;
+    if (!n) {
+      syncSeekUi();
+      return;
+    }
+    if (mode === "one") {
+      a.currentTime = 0;
+      void a.play().catch(() => {});
+      syncSeekUi();
+      return;
+    }
+    /* 防止部分 WebView 对 ended 连发，导致并发 resolve */
+    const t = Date.now();
+    if (t - mobileAudioEndedAt < 400) {
+      syncSeekUi();
+      return;
+    }
+    mobileAudioEndedAt = t;
+    const pfNext =
+      prefetchedNextPlay &&
+      prefetchedNextPlay.fromIdx === playIndex &&
+      prefetchedNextPlay.listeningGen === playLoadGeneration
+        ? prefetchedNextPlay.nextIdx
+        : null;
+    if (mode === "loop_list") {
+      schedulePlayFromQueueIndex(pfNext != null ? pfNext : (playIndex + 1) % n);
+      syncSeekUi();
+      return;
+    }
+    if (mode === "shuffle") {
+      schedulePlayFromQueueIndex(pfNext != null ? pfNext : randomNextIndex());
+      syncSeekUi();
+      return;
+    }
+    if (playIndex < n - 1) {
+      schedulePlayFromQueueIndex(pfNext != null ? pfNext : playIndex + 1);
+    } else {
+      syncPlayBtnUi();
+      mediaNotifClear();
     }
     syncSeekUi();
   });
@@ -1424,15 +1961,28 @@ function wirePlayer() {
     if (sub && err && err.code === 4) {
       sub.textContent = "无法加载音频（可重试）";
     }
+    // 兜底：当前流报错时，仅自动强制刷新一次链接（绕过 recent_play_url），避免死循环。
+    const n = playQueue.length;
+    if (!n || playIndex < 0 || playIndex >= n) return;
+    const now = Date.now();
+    if (playIndex === lastAutoRetryTrackIdx && now - lastAutoRetryAt < 10_000) return;
+    lastAutoRetryTrackIdx = playIndex;
+    lastAutoRetryAt = now;
+    if (sub) sub.textContent = "链接异常，正在重试…";
+    window.setTimeout(() => {
+      void playFromQueueIndex(playIndex, { forceRefresh: true });
+    }, 120);
   });
   a.addEventListener("play", () => {
-    if (playBtn) playBtn.textContent = "⏸";
+    syncPlayBtnUi();
+    mediaNotifSetState({ playing: true, positionMs: Math.round((a.currentTime || 0) * 1000) });
   });
   a.addEventListener("pause", () => {
-    if (playBtn) playBtn.textContent = "▶";
+    syncPlayBtnUi();
+    mediaNotifSetState({ playing: false, positionMs: Math.round((a.currentTime || 0) * 1000) });
   });
 
-  playBtn?.addEventListener("click", async () => {
+  const togglePlay = async () => {
     if (!a.src) return;
     try {
       if (a.paused) await a.play();
@@ -1440,26 +1990,214 @@ function wirePlayer() {
     } catch (e) {
       console.warn(e);
     }
-  });
-  document.getElementById("cp-m-prev")?.addEventListener("click", () => {
-    if (playIndex > 0) void playFromQueueIndex(playIndex - 1);
-  });
-  document.getElementById("cp-m-next")?.addEventListener("click", () => {
-    if (playIndex < playQueue.length - 1) void playFromQueueIndex(playIndex + 1);
-  });
-
-  seek?.addEventListener("pointerdown", () => {
-    seekDragging = true;
-  });
-  seek?.addEventListener("pointerup", () => {
-    seekDragging = false;
-    syncSeekUi();
-  });
-  seek?.addEventListener("input", () => {
-    const d = a.duration;
-    if (d && Number.isFinite(d) && d > 0) {
-      a.currentTime = (Number(seek.value) / 1000) * d;
+  };
+  const gotoPrev = () => {
+    const n = playQueue.length;
+    if (!n) return;
+    const mode = PLAY_MODES[playModeIndex].key;
+    if (mode === "shuffle") {
+      void playFromQueueIndex((playIndex - 1 + n) % n);
+      return;
     }
+    if (mode === "loop_list" && playIndex === 0) {
+      void playFromQueueIndex(n - 1);
+      return;
+    }
+    if (playIndex > 0) void playFromQueueIndex(playIndex - 1);
+  };
+  const gotoNext = () => {
+    const n = playQueue.length;
+    if (!n) return;
+    const mode = PLAY_MODES[playModeIndex].key;
+    if (mode === "shuffle") {
+      void playFromQueueIndex(randomNextIndex());
+      return;
+    }
+    if (mode === "loop_list" && playIndex === n - 1) {
+      void playFromQueueIndex(0);
+      return;
+    }
+    if (playIndex < n - 1) void playFromQueueIndex(playIndex + 1);
+  };
+
+  playBtn?.addEventListener("click", togglePlay);
+  document.getElementById("cp-m-prev")?.addEventListener("click", gotoPrev);
+  document.getElementById("cp-m-next")?.addEventListener("click", gotoNext);
+  // Now Playing 页上的同名控件与底部 dock 共享同一 <audio> 实例
+  document.getElementById("cp-m-np-play")?.addEventListener("click", togglePlay);
+  document.getElementById("cp-m-np-prev")?.addEventListener("click", gotoPrev);
+  document.getElementById("cp-m-np-next")?.addEventListener("click", gotoNext);
+
+  const seekInput = (el) => {
+    if (!el) return;
+    el.addEventListener("pointerdown", () => {
+      seekDragging = true;
+    });
+    el.addEventListener("pointerup", () => {
+      seekDragging = false;
+      syncSeekUi();
+    });
+    el.addEventListener("input", () => {
+      const d = a.duration;
+      if (d && Number.isFinite(d) && d > 0) {
+        a.currentTime = (Number(el.value) / 1000) * d;
+      }
+    });
+  };
+  seekInput(seek);
+  seekInput(document.getElementById("cp-m-np-seek"));
+}
+
+/** —— Now Playing 页 开关 —— */
+function openNowPlayingPage() {
+  const page = document.getElementById("cp-m-np-page");
+  if (!page) return;
+  if (!playQueue.length) return; // 未播放时不展开
+  page.classList.remove("hidden");
+  page.setAttribute("aria-hidden", "false");
+  syncSeekUi();
+  syncPlayBtnUi();
+  syncPlayModeUi();
+  syncMobilePlayerNav();
+}
+
+function closeNowPlayingPage() {
+  const page = document.getElementById("cp-m-np-page");
+  if (!page) return;
+  page.classList.add("hidden");
+  page.setAttribute("aria-hidden", "true");
+}
+
+/** —— 播放列表抽屉 —— */
+function renderQueueSheet() {
+  const ul = document.getElementById("cp-m-queue-ul");
+  const empty = document.getElementById("cp-m-queue-empty");
+  const count = document.getElementById("cp-m-queue-count");
+  if (!ul) return;
+  ul.innerHTML = "";
+  if (count) count.textContent = String(playQueue.length);
+  if (!playQueue.length) {
+    if (empty) empty.classList.remove("hidden");
+    return;
+  }
+  if (empty) empty.classList.add("hidden");
+  playQueue.forEach((it, i) => {
+    const li = document.createElement("li");
+    if (i === playIndex) li.classList.add("is-current");
+    const title = it.title || "—";
+    const sub = it.local_path
+      ? `${it.artist || ""}${it.artist ? " · " : ""}本地`
+      : it.artist || "";
+    li.innerHTML = `
+      <span class="cp-m-queue-idx">${i + 1}</span>
+      <div class="cp-m-queue-main">
+        <div class="cp-m-queue-main-title">${escapeHtml(title)}</div>
+        <div class="cp-m-queue-main-sub">${escapeHtml(sub || "—")}</div>
+      </div>
+      ${i === playIndex ? '<span class="cp-m-queue-badge">播放中</span>' : ""}
+    `;
+    li.addEventListener("click", () => {
+      if (i !== playIndex) {
+        void playFromQueueIndex(i);
+      } else {
+        const a = audioEl();
+        if (a && a.paused && a.src) {
+          void a.play().catch(() => {});
+        }
+      }
+      closeQueueSheet();
+    });
+    ul.appendChild(li);
+  });
+}
+
+function openQueueSheet() {
+  const sheet = document.getElementById("cp-m-queue-sheet");
+  const back = document.getElementById("cp-m-queue-backdrop");
+  if (!sheet || !back) return;
+  renderQueueSheet();
+  sheet.classList.remove("hidden");
+  back.classList.remove("hidden");
+  sheet.setAttribute("aria-hidden", "false");
+  back.setAttribute("aria-hidden", "false");
+}
+
+function closeQueueSheet() {
+  const sheet = document.getElementById("cp-m-queue-sheet");
+  const back = document.getElementById("cp-m-queue-backdrop");
+  if (!sheet || !back) return;
+  sheet.classList.add("hidden");
+  back.classList.add("hidden");
+  sheet.setAttribute("aria-hidden", "true");
+  back.setAttribute("aria-hidden", "true");
+}
+
+function clearQueue() {
+  if (!playQueue.length) return;
+  if (!window.confirm("确定清空播放列表？当前曲目仍会继续播放，直到结束。")) return;
+  invalidateMobilePrefetch();
+  mediaNotifClear();
+  // 保留当前曲目，避免直接中断音频
+  const cur = playQueue[playIndex];
+  if (cur) {
+    playQueue = [cur];
+    playIndex = 0;
+  } else {
+    playQueue = [];
+    playIndex = 0;
+  }
+  renderQueueSheet();
+  syncMobilePlayerNav();
+}
+
+function wireNowPlayingAndQueue() {
+  document.getElementById("cp-m-dock-open")?.addEventListener("click", () => {
+    openNowPlayingPage();
+  });
+  document.getElementById("cp-m-np-close")?.addEventListener("click", () => {
+    closeNowPlayingPage();
+  });
+  document.getElementById("cp-m-np-open-queue")?.addEventListener("click", () => {
+    openQueueSheet();
+  });
+  document.getElementById("cp-m-np-play-mode")?.addEventListener("click", () => {
+    cyclePlayMode();
+  });
+  document.getElementById("cp-m-queue-play-mode")?.addEventListener("click", () => {
+    cyclePlayMode();
+  });
+  document.getElementById("cp-m-queue-download")?.addEventListener("click", () => {
+    const rows = playQueueToBatchRows();
+    if (!rows.length) {
+      alert("播放列表为空。");
+      return;
+    }
+    openDlQualityPanel(rows);
+  });
+  document.getElementById("cp-m-queue-addto")?.addEventListener("click", () => {
+    const rows = playQueueToBatchRows();
+    if (!rows.length) {
+      alert("播放列表为空。");
+      return;
+    }
+    void openAddToPanel({ rows });
+  });
+  document.getElementById("cp-m-dock-queue")?.addEventListener("click", () => {
+    openQueueSheet();
+  });
+  document.getElementById("cp-m-queue-close")?.addEventListener("click", () => {
+    closeQueueSheet();
+  });
+  document.getElementById("cp-m-queue-clear")?.addEventListener("click", () => {
+    clearQueue();
+  });
+  document.getElementById("cp-m-queue-backdrop")?.addEventListener("click", () => {
+    closeQueueSheet();
+  });
+  // 键盘 Escape / 安卓物理返回键：统一走 androidBackInternal
+  window.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    if (androidBackInternal()) e.preventDefault();
   });
 }
 
@@ -1495,7 +2233,7 @@ export function startMobileApp() {
   document.getElementById("cp-m-search-act-like")?.addEventListener("click", () => runBatchLike());
   document.getElementById("cp-m-addto-close")?.addEventListener("click", () => closeAddToPanel());
   document.getElementById("cp-m-addto-new")?.addEventListener("click", async () => {
-    const items = mapRowsToAppendItems(getSelectedRowsForBatch());
+    const items = mapRowsToAppendItems(getAddToPanelRows());
     if (!items.length) {
       alert("请先选择曲目。");
       return;
@@ -1550,6 +2288,11 @@ export function startMobileApp() {
 
   wireImportPanel();
   wirePlayer();
+  wireNowPlayingAndQueue();
+  syncPlayModeUi();
+  syncMobilePlayerNav();
+  wireEnrichListeners();
+  mediaNotifRequestPermission();
   void refreshPlaylists();
   void refreshRecent();
 }

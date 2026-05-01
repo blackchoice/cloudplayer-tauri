@@ -48,14 +48,13 @@ use crate::global_hotkeys::{dispatch_shortcut, HotkeyShortcutMap};
 pub fn run() {
     logging::install_panic_hook();
 
+    // 移动端不能出现 `Option<HotkeyShortcutMap>`：该类型未导入且全局快捷键仅桌面存在。
     #[cfg(desktop)]
     let hotkey_map = HotkeyShortcutMap::default();
     #[cfg(desktop)]
     let hotkey_for_handler = hotkey_map.clone();
     #[cfg(desktop)]
-    let desktop_hotkey_state = Some(hotkey_map);
-    #[cfg(not(desktop))]
-    let desktop_hotkey_state: Option<HotkeyShortcutMap> = None;
+    let desktop_hotkey_map = hotkey_map;
 
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -88,6 +87,29 @@ pub fn run() {
             {
                 init_android_storage(app)?;
             }
+
+            // Create the main window programmatically with an absolute WebView2 data directory,
+            // so the app works when installed in a read-only location (e.g. D:\Program Files).
+            // A relative dataDirectory would resolve against the exe directory and fail without elevation.
+            let webview_data = app
+                .path()
+                .app_data_dir()
+                .unwrap_or_else(|_| std::env::temp_dir())
+                .join("webview2");
+            let _ = std::fs::create_dir_all(&webview_data);
+            #[cfg(desktop)]
+            {
+                use tauri::webview::WebviewWindowBuilder;
+                let _win = WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default())
+                    .title("CloudPlayer")
+                    .inner_size(1100.0, 700.0)
+                    .resizable(true)
+                    .decorations(false)
+                    .shadow(true)
+                    .data_directory(webview_data)
+                    .build();
+            }
+
             if let Err(e) = logging::init_from_app(app.handle()) {
                 eprintln!("CloudPlayer: file logging init failed: {e}");
             }
@@ -124,14 +146,15 @@ pub fn run() {
                 download_tx,
             }));
 
-            if let Some(hm) = desktop_hotkey_state {
+            #[cfg(desktop)]
+            {
                 let cfg = Settings::load().global_hotkeys.clone();
                 let _ = crate::global_hotkeys::apply_global_hotkeys_runtime(
                     app.handle(),
                     &cfg,
-                    &hm,
+                    &desktop_hotkey_map,
                 );
-                app.manage(hm);
+                app.manage(desktop_hotkey_map);
             }
 
             #[cfg(desktop)]
@@ -214,6 +237,9 @@ pub fn run() {
             commands::create_playlist,
             commands::rename_playlist,
             commands::delete_playlist,
+            commands::ensure_favorites_playlist,
+            commands::add_to_favorites,
+            commands::remove_from_favorites,
             commands::delete_playlist_import_item,
             commands::replace_playlist_import_items,
             commands::append_playlist_import_items,

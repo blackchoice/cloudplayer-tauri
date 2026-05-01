@@ -31,6 +31,23 @@ pub fn init_android_storage<R: tauri::Runtime>(app: &tauri::App<R>) -> Result<()
     Ok(())
 }
 
+/// 用户主目录或等价可写路径。**禁止**回退到 `.`：安装于 `Program Files` 或快捷方式未设「起始位置」时，
+/// `std::env::current_dir()` 常在只读目录，会导致 `.cloudplayer` 无法创建。
+fn writable_user_profile_or_local() -> PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(p) = std::env::var("USERPROFILE") {
+            let pb = PathBuf::from(p.trim());
+            if !pb.as_os_str().is_empty() {
+                return pb;
+            }
+        }
+    }
+    dirs::home_dir()
+        .or_else(dirs::data_local_dir)
+        .unwrap_or_else(|| std::env::temp_dir())
+}
+
 pub fn config_dir() -> PathBuf {
     #[cfg(target_os = "android")]
     {
@@ -46,9 +63,7 @@ pub fn config_dir() -> PathBuf {
     }
     #[cfg(not(target_os = "android"))]
     {
-        let base = dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".cloudplayer");
+        let base = writable_user_profile_or_local().join(".cloudplayer");
         let _ = fs::create_dir_all(&base);
         base
     }
@@ -202,8 +217,7 @@ pub fn default_download_dir() -> PathBuf {
     }
     #[cfg(not(target_os = "android"))]
     {
-        dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
+        writable_user_profile_or_local()
             .join("Music")
             .join("CloudPlayer")
     }

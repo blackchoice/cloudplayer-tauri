@@ -58,6 +58,7 @@ pub fn apply_global_hotkeys(app: AppHandle, cfg: GlobalHotkeys) -> Result<crate:
     }
     #[cfg(not(desktop))]
     {
+        let _ = app;
         let mut s = Settings::load();
         s.global_hotkeys = cfg;
         s.save()?;
@@ -415,6 +416,7 @@ pub async fn resolve_online_play(
     song_id: String,
     title: String,
     artist: String,
+    skip_recent_url: Option<bool>,
 ) -> Result<ResolveOnlinePlayOut, String> {
     let t0 = std::time::Instant::now();
     let sid = song_id.trim();
@@ -533,26 +535,28 @@ pub async fn resolve_online_play(
     }
 
     // 3) 播放记录中上次成功使用的试听直链（可能已过期，由播放器侧失败）
-    let stored_recent_url: Option<String> = {
-        let conn = db.conn.lock().map_err(|e| e.to_string())?;
-        recent_play_stored_preview_url(&conn, sid)
-    };
-    if let Some(u) = stored_recent_url {
-        let url_trim = u.trim().to_string();
-        info!(
-            target: "pj-play",
-            "resolve_online_play ok sid={} via=recent_play_url elapsed_ms={} url_len={} url_prefix={}",
-            sid,
-            t0.elapsed().as_millis(),
-            url_trim.len(),
-            log_url_160(&url_trim)
-        );
-        return Ok(ResolveOnlinePlayOut {
-            kind: "url".to_string(),
-            path: None,
-            url: Some(url_trim),
-            via: "recent_play_url".to_string(),
-        });
+    if !skip_recent_url.unwrap_or(false) {
+        let stored_recent_url: Option<String> = {
+            let conn = db.conn.lock().map_err(|e| e.to_string())?;
+            recent_play_stored_preview_url(&conn, sid)
+        };
+        if let Some(u) = stored_recent_url {
+            let url_trim = u.trim().to_string();
+            info!(
+                target: "pj-play",
+                "resolve_online_play ok sid={} via=recent_play_url elapsed_ms={} url_len={} url_prefix={}",
+                sid,
+                t0.elapsed().as_millis(),
+                url_trim.len(),
+                log_url_160(&url_trim)
+            );
+            return Ok(ResolveOnlinePlayOut {
+                kind: "url".to_string(),
+                path: None,
+                url: Some(url_trim),
+                via: "recent_play_url".to_string(),
+            });
+        }
     }
 
     state.limiter.acquire_slot().await;
@@ -661,6 +665,8 @@ pub struct ImportItemIn {
 pub struct PlaylistRow {
     pub id: i64,
     pub name: String,
+    #[serde(default)]
+    pub is_favorites: bool,
 }
 
 #[tauri::command]
@@ -675,13 +681,14 @@ pub fn parse_import_text(
 pub fn list_playlists(state: State<'_, DbState>) -> Result<Vec<PlaylistRow>, String> {
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
     let mut stmt = conn
-        .prepare("SELECT id, name FROM playlists ORDER BY name COLLATE NOCASE")
+        .prepare("SELECT id, name, is_favorites FROM playlists ORDER BY is_favorites DESC, name COLLATE NOCASE")
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], |r| {
             Ok(PlaylistRow {
                 id: r.get(0)?,
                 name: r.get(1)?,
+                is_favorites: r.get::<_, i64>(2)? != 0,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -701,6 +708,8 @@ pub struct PlaylistSummaryRow {
     /// 首条非空 `cover_url`（按 `sort_order`），与歌单详情页头图一致。
     #[serde(default)]
     pub cover_url: String,
+    #[serde(default)]
+    pub is_favorites: bool,
 }
 
 #[tauri::command]
@@ -711,11 +720,12 @@ pub fn list_playlists_summary(state: State<'_, DbState>) -> Result<Vec<PlaylistS
             "SELECT p.id, p.name, COUNT(i.id) AS cnt, \
              COALESCE((SELECT TRIM(COALESCE(i2.cover_url, '')) FROM playlist_import_items i2 \
               WHERE i2.playlist_id = p.id AND LENGTH(TRIM(COALESCE(i2.cover_url, ''))) > 0 \
-              ORDER BY i2.sort_order ASC, i2.id ASC LIMIT 1), '') AS cover_url \
+              ORDER BY i2.sort_order ASC, i2.id ASC LIMIT 1), '') AS cover_url, \
+             p.is_favorites \
              FROM playlists p \
              LEFT JOIN playlist_import_items i ON i.playlist_id = p.id \
              GROUP BY p.id \
-             ORDER BY p.name COLLATE NOCASE",
+             ORDER BY p.is_favorites DESC, p.name COLLATE NOCASE",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
@@ -725,6 +735,7 @@ pub fn list_playlists_summary(state: State<'_, DbState>) -> Result<Vec<PlaylistS
                 name: r.get(1)?,
                 track_count: r.get(2)?,
                 cover_url: r.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                is_favorites: r.get::<_, i64>(4)? != 0,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -791,6 +802,105 @@ pub fn create_playlist(state: State<'_, DbState>, name: String) -> Result<i64, S
     conn.execute("INSERT INTO playlists (name) VALUES (?1)", [n])
         .map_err(|e| e.to_string())?;
     Ok(conn.last_insert_rowid())
+}
+
+/// 获取或创建「我的喜欢」收藏歌单，返回其 ID。
+#[tauri::command]
+pub fn ensure_favorites_playlist(state: State<'_, DbState>) -> Result<i64, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    // 查找已存在的收藏歌单
+    let existing: Option<i64> = conn
+        .query_row(
+            "SELECT id FROM playlists WHERE is_favorites = 1 LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
+        .ok();
+    if let Some(id) = existing {
+        return Ok(id);
+    }
+    // 不存在则创建
+    conn.execute(
+        "INSERT INTO playlists (name, is_favorites) VALUES ('我的喜欢', 1)",
+        [],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(conn.last_insert_rowid())
+}
+
+/// 向收藏歌单添加一条曲目（按 source_id 去重）。
+#[tauri::command]
+pub fn add_to_favorites(
+    state: State<'_, DbState>,
+    title: String,
+    artist: String,
+    album: String,
+    source_id: String,
+    cover_url: String,
+    play_url: String,
+    duration_ms: i64,
+) -> Result<(), String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    // 获取收藏歌单 ID
+    let fav_id: i64 = conn
+        .query_row(
+            "SELECT id FROM playlists WHERE is_favorites = 1 LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|_| "收藏歌单不存在，请先调用 ensure_favorites_playlist".to_string())?;
+    // 去重：如果已有相同 source_id 的条目则跳过
+    let sid = source_id.trim();
+    if !sid.is_empty() {
+        let exists: bool = conn
+            .query_row(
+                "SELECT COUNT(1) FROM playlist_import_items WHERE playlist_id = ?1 AND pjmp3_source_id = ?2",
+                rusqlite::params![fav_id, sid],
+                |r| r.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
+        if exists {
+            return Ok(());
+        }
+    }
+    // 获取当前最大 sort_order
+    let max_order: i64 = conn
+        .query_row(
+            "SELECT COALESCE(MAX(sort_order), 0) FROM playlist_import_items WHERE playlist_id = ?1",
+            [fav_id],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    conn.execute(
+        "INSERT INTO playlist_import_items (playlist_id, sort_order, title, artist, album, pjmp3_source_id, cover_url, play_url, duration_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        rusqlite::params![fav_id, max_order + 1, title, artist, album, sid, cover_url, play_url, duration_ms],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 从收藏歌单移除指定 source_id 的曲目。
+#[tauri::command]
+pub fn remove_from_favorites(state: State<'_, DbState>, source_id: String) -> Result<(), String> {
+    let sid = source_id.trim();
+    if sid.is_empty() {
+        return Ok(());
+    }
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let fav_id: i64 = conn
+        .query_row(
+            "SELECT id FROM playlists WHERE is_favorites = 1 LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|_| "收藏歌单不存在".to_string())?;
+    conn.execute(
+        "DELETE FROM playlist_import_items WHERE playlist_id = ?1 AND pjmp3_source_id = ?2",
+        rusqlite::params![fav_id, sid],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]

@@ -1,6 +1,6 @@
 [package]
 name = "cloudplayer-tauri"
-version = "1.3.2"
+version = "1.4.0"
 description = "CloudPlayer desktop (Tauri / Rust)"
 edition = "2021"
 

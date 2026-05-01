@@ -655,6 +655,12 @@ body {
 .col-like {
   width: 52px;
   text-align: center;
+  cursor: pointer;
+  user-select: none;
+  transition: color 0.15s;
+}
+.col-like:hover {
+  color: #e11d48;
 }
 
 .playlist-hero {
@@ -874,41 +880,86 @@ body {
 }
 
 .queue-panel {
-  border-top: 1px solid var(--border);
-  background: var(--bg-card);
-  max-height: 280px;
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 320px;
+  z-index: 600;
+  background: #fff;
+  border-left: 1px solid #e5e7eb;
   display: flex;
   flex-direction: column;
+  transform: translateX(0);
+  transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: -4px 0 16px rgba(0, 0, 0, 0.08);
 }
-
-.queue-panel.collapsed .queue-body {
-  display: none;
+.queue-panel.is-immersive {
+  background: rgba(10, 10, 18, 0.94);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-left: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow: -4px 0 24px rgba(0, 0, 0, 0.4);
+}
+.queue-panel.collapsed {
+  transform: translateX(100%);
 }
 
 .queue-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 16px;
-  font-size: 12px;
-  color: var(--text-secondary);
+  padding: 14px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #374151;
+  border-bottom: 1px solid #f3f4f6;
+  flex-shrink: 0;
+}
+.queue-panel.is-immersive .queue-header {
+  color: rgba(255, 255, 255, 0.8);
+  border-bottom-color: rgba(255, 255, 255, 0.06);
 }
 
 .queue-toggle {
   border: none;
-  background: transparent;
-  color: var(--accent);
+  background: #f3f4f6;
+  color: #6b7280;
   cursor: pointer;
   font: inherit;
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 4px;
+  transition: background 0.12s, color 0.12s;
+}
+.queue-toggle:hover {
+  background: #e5e7eb;
+  color: #374151;
+}
+.queue-panel.is-immersive .queue-toggle {
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.5);
+}
+.queue-panel.is-immersive .queue-toggle:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.8);
 }
 
 .queue-body {
-  padding: 8px 16px 16px;
-  color: var(--text-secondary);
+  flex: 1;
+  padding: 8px 0;
+  color: #6b7280;
   font-size: 12px;
-  max-height: 220px;
-  overflow: auto;
+  overflow-y: auto;
 }
+.queue-panel.is-immersive .queue-body {
+  color: rgba(255, 255, 255, 0.6);
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.1) transparent;
+}
+.queue-panel.is-immersive .queue-body::-webkit-scrollbar { width: 5px; }
+.queue-panel.is-immersive .queue-body::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 3px; }
+.queue-panel.is-immersive .queue-body::-webkit-scrollbar-track { background: transparent; }
 
 .queue-list {
   list-style: none;
@@ -917,14 +968,31 @@ body {
 }
 
 .queue-list li {
-  padding: 6px 4px;
-  border-bottom: 1px solid var(--border);
+  padding: 8px 16px;
+  border-bottom: 1px solid #f9fafb;
   cursor: default;
+  transition: background 0.1s;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-
+.queue-list li:hover {
+  background: #f9fafb;
+}
 .queue-list li.is-current {
   color: var(--accent);
   font-weight: 600;
+  background: rgba(99, 102, 241, 0.04);
+}
+.queue-panel.is-immersive .queue-list li {
+  border-bottom-color: rgba(255, 255, 255, 0.04);
+}
+.queue-panel.is-immersive .queue-list li:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+.queue-panel.is-immersive .queue-list li.is-current {
+  color: rgba(200, 100, 255, 0.9);
+  background: rgba(200, 100, 255, 0.06);
 }
 
 /* —— 底部播放 dock：白底轻量样式 —— */
@@ -969,6 +1037,347 @@ body {
   object-fit: cover;
   display: block;
   background: #f3f4f6;
+}
+
+/* —— 播放栏封面悬浮效果 —— */
+.dock-player__art {
+  cursor: zoom-in;
+  position: relative;
+}
+.dock-player__art::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0);
+  transition: background 0.2s;
+  pointer-events: none;
+  border-radius: 10px;
+}
+.dock-player__art:hover::after {
+  background: rgba(0, 0, 0, 0.45);
+}
+.dock-player__art-arrows {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.2s;
+  pointer-events: none;
+  z-index: 1;
+}
+.dock-player__art:hover .dock-player__art-arrows {
+  opacity: 1;
+}
+.dock-player__art-arrows svg {
+  width: 28px;
+  height: 28px;
+  stroke: #fff;
+  fill: none;
+  stroke-width: 2;
+}
+
+/* —— 沉浸播放页全屏覆盖层 —— */
+.immersive-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 500;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #0a0a12;
+}
+.immersive-overlay[hidden] {
+  display: none !important;
+}
+.immersive-overlay__bg {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse at 20% 50%, rgba(255, 0, 128, 0.18) 0%, transparent 55%),
+    radial-gradient(ellipse at 80% 50%, rgba(0, 200, 255, 0.15) 0%, transparent 55%),
+    radial-gradient(ellipse at 50% 100%, rgba(120, 0, 255, 0.12) 0%, transparent 50%),
+    #0a0a12;
+  animation: neon-bg-shift 12s ease-in-out infinite alternate;
+  z-index: -1;
+}
+@keyframes neon-bg-shift {
+  0%   { filter: hue-rotate(0deg) brightness(1); }
+  50%  { filter: hue-rotate(15deg) brightness(1.05); }
+  100% { filter: hue-rotate(-10deg) brightness(1); }
+}
+.immersive-overlay__top {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px 8px 16px;
+  min-height: 40px;
+  -webkit-app-region: drag;
+  user-select: none;
+}
+.immersive-overlay__top-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+.immersive-overlay__top-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  -webkit-app-region: no-drag;
+}
+.immersive-overlay__top-btn {
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.45);
+  width: 36px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  transition: background 0.12s, color 0.12s;
+}
+.immersive-overlay__top-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+.immersive-overlay__top-btn--close:hover {
+  background: #e81123;
+  color: #fff;
+}
+.immersive-overlay__main {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 64px;
+  padding: 0 48px 16px;
+  animation: immersive-fade-in 0.3s ease;
+  min-height: 0;
+}
+@keyframes immersive-fade-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+.immersive-overlay__left {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  flex-shrink: 0;
+}
+.immersive-overlay__art-wrap {
+  width: min(360px, 38vmin);
+  height: min(360px, 38vmin);
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 8px 48px rgba(0, 0, 0, 0.5);
+}
+.immersive-overlay__art {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.immersive-overlay__info {
+  text-align: center;
+  color: #f1f5f9;
+  max-width: min(360px, 38vmin);
+}
+.immersive-overlay__song-title {
+  font-size: 1.3rem;
+  font-weight: 700;
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.immersive-overlay__song-artist {
+  font-size: 0.9rem;
+  color: #94a3b8;
+  margin-top: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.immersive-overlay__right {
+  flex: 1;
+  min-width: 0;
+  max-height: 70vh;
+  overflow-y: auto;
+  mask-image: linear-gradient(transparent 0%, black 15%, black 85%, transparent 100%);
+  -webkit-mask-image: linear-gradient(transparent 0%, black 15%, black 85%, transparent 100%);
+  scrollbar-width: none;
+}
+.immersive-overlay__right::-webkit-scrollbar {
+  display: none;
+}
+.immersive-lyrics {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 40px 0 40px 24px;
+}
+.immersive-lyrics__line {
+  font-size: 1.25rem;
+  color: rgba(255, 255, 255, 0.35);
+  transition: color 0.3s, font-size 0.3s, transform 0.3s;
+  cursor: pointer;
+  padding: 4px 0;
+  line-height: 1.6;
+  display: inline;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+.immersive-lyrics__line:hover {
+  color: rgba(255, 255, 255, 0.6);
+}
+.immersive-lyrics__line.is-active {
+  color: #fff;
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+.immersive-lyrics__line.is-past {
+  color: rgba(255, 255, 255, 0.45);
+}
+/* 沉浸页底部控制栏（三段布局） */
+.immersive-overlay__dock {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 24px 24px;
+}
+.immersive-dock__left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.immersive-exit-btn {
+  background: none;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.35);
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8rem;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.immersive-exit-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.8);
+  border-color: rgba(255, 255, 255, 0.25);
+}
+.immersive-dock__center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  max-width: 500px;
+}
+.immersive-dock__transport {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.immersive-dock__timeline {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.immersive-dock__right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+/* 沉浸页底部栏：暗色主题覆盖 */
+.immersive-overlay__dock .dock-tbtn {
+  color: #e2e8f0;
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.06);
+}
+.immersive-overlay__dock .dock-tbtn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+.immersive-overlay__dock .dock-tbtn--main {
+  border-color: var(--dock-accent);
+  background: var(--dock-accent);
+  color: #ffffff;
+}
+.immersive-overlay__dock .dock-mode {
+  color: rgba(255, 255, 255, 0.3);
+  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+}
+.immersive-overlay__dock .dock-mode:hover {
+  color: rgba(255, 255, 255, 0.6);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+.immersive-overlay__dock .dock-ic {
+  color: rgba(255, 255, 255, 0.35);
+  min-width: 32px;
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.immersive-overlay__dock .dock-ic:hover {
+  color: rgba(255, 255, 255, 0.7);
+}
+.immersive-overlay__dock .dock-ic--accent {
+  color: rgba(200, 100, 255, 0.6);
+}
+.immersive-overlay__dock .dock-ic--accent:hover {
+  color: rgba(200, 100, 255, 0.9);
+}
+.immersive-overlay__dock .dock-chip {
+  color: rgba(255, 255, 255, 0.3);
+  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+}
+.immersive-overlay__dock .dock-chip:hover {
+  color: rgba(255, 255, 255, 0.6);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+.immersive-overlay__dock .dock-time {
+  color: #94a3b8;
+}
+.immersive-overlay__dock .dock-seek {
+  background: rgba(255, 255, 255, 0.15);
+}
+.immersive-overlay__dock .dock-seek::-webkit-slider-runnable-track {
+  background: rgba(255, 255, 255, 0.15);
+}
+.immersive-overlay__dock .dock-vol__icon {
+  color: #94a3b8;
 }
 
 .dock-player__meta-col {

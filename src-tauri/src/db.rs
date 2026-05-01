@@ -116,6 +116,7 @@ pub fn open_and_init() -> Result<Connection, rusqlite::Error> {
         "ALTER TABLE playlist_import_items ADD COLUMN duration_ms INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE playlist_import_items ADD COLUMN audio_cache_path TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE recent_plays ADD COLUMN play_url TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE playlists ADD COLUMN is_favorites INTEGER NOT NULL DEFAULT 0",
     ] {
         let _ = conn.execute(stmt, []);
     }

@@ -519,7 +519,7 @@
                   <button type="button" class="dock-menu__item" data-more="rm-queue">从播放列表删除</button>
                 </div>
               </div>
-              <button type="button" id="btn-dock-settings" class="dock-ic" title="偏好设置" aria-label="偏好设置">⚙</button>
+              <button type="button" id="btn-dock-settings" class="dock-ic" title="偏好设置" aria-label="偏好设置">🔧</button>
             </div>
           </div>
         </div>
@@ -567,6 +567,59 @@
           </label>
         </div>
       </footer>
+      <div id="immersive-player" class="immersive-overlay" hidden aria-hidden="true">
+        <div class="immersive-overlay__bg"></div>
+        <div class="immersive-overlay__top">
+          <div class="immersive-overlay__top-left"></div>
+          <div class="immersive-overlay__top-controls">
+            <button type="button" class="immersive-overlay__top-btn" id="immersive-win-min" title="最小化">─</button>
+            <button type="button" class="immersive-overlay__top-btn" id="immersive-win-max" title="最大化">☐</button>
+            <button type="button" class="immersive-overlay__top-btn immersive-overlay__top-btn--close" id="immersive-close" title="关闭">✕</button>
+          </div>
+        </div>
+        <div class="immersive-overlay__main">
+          <div class="immersive-overlay__left">
+            <div class="immersive-overlay__art-wrap">
+              <img id="immersive-cover" class="immersive-overlay__art" src="" alt="" />
+            </div>
+            <div class="immersive-overlay__info">
+              <div id="immersive-title" class="immersive-overlay__song-title">未播放</div>
+              <div id="immersive-sub" class="immersive-overlay__song-artist"></div>
+            </div>
+          </div>
+          <div class="immersive-overlay__right">
+            <div id="immersive-lyrics" class="immersive-lyrics"></div>
+          </div>
+        </div>
+        <div class="immersive-overlay__dock">
+          <div class="immersive-dock__left">
+            <button type="button" id="immersive-exit" class="immersive-exit-btn" title="退出沉浸播放">✕</button>
+          </div>
+          <div class="immersive-dock__center">
+            <div class="immersive-dock__transport">
+              <button type="button" id="immersive-mode" class="dock-mode" title="播放模式">序</button>
+              <button type="button" id="immersive-prev" class="dock-tbtn" title="上一首">⏮</button>
+              <button type="button" id="immersive-play" class="dock-tbtn dock-tbtn--main" title="播放/暂停">▶</button>
+              <button type="button" id="immersive-next" class="dock-tbtn" title="下一首">⏭</button>
+              <button type="button" id="immersive-fav" class="dock-ic" title="喜欢">♡</button>
+            </div>
+            <div class="immersive-dock__timeline">
+              <span id="immersive-time-current" class="dock-time">0:00</span>
+              <input type="range" id="immersive-seek" class="dock-seek" min="0" max="1000" value="0" step="1" aria-label="进度" />
+              <span id="immersive-time-total" class="dock-time">0:00</span>
+            </div>
+          </div>
+          <div class="immersive-dock__right">
+            <button type="button" id="immersive-quality" class="dock-chip" title="音质">标准</button>
+            <button type="button" id="immersive-lyrics-btn" class="dock-ic dock-ic--accent" title="桌面歌词">词</button>
+            <button type="button" id="immersive-queue" class="dock-ic" title="播放列表">☰</button>
+            <label class="dock-vol" title="音量">
+              <span class="dock-vol__icon" aria-hidden="true">◇</span>
+              <input id="immersive-volume" type="range" min="0" max="100" value="70" class="dock-vol__range" />
+            </label>
+          </div>
+        </div>
+      </div>
       <div id="lyrics-replace-modal" class="modal-overlay" hidden aria-hidden="true">
         <div
           class="modal-dialog modal-dialog--lyrics-replace"
@@ -939,15 +992,23 @@
 
       <div class="cp-m-player-wrap">
         <div class="cp-m-mini-player">
-          <img id="cp-m-dock-cover" width="48" height="48" alt="" class="cp-m-dock-cover" />
-          <div class="cp-m-dock-meta">
-            <div id="cp-m-dock-title" class="cp-m-dock-title">未播放</div>
-            <div id="cp-m-dock-sub" class="cp-m-dock-sub">选择曲目开始</div>
-          </div>
+          <button
+            type="button"
+            id="cp-m-dock-open"
+            class="cp-m-dock-open"
+            aria-label="打开播放页"
+          >
+            <img id="cp-m-dock-cover" width="48" height="48" alt="" class="cp-m-dock-cover" />
+            <span class="cp-m-dock-meta">
+              <span id="cp-m-dock-title" class="cp-m-dock-title">未播放</span>
+              <span id="cp-m-dock-sub" class="cp-m-dock-sub">选择曲目开始</span>
+            </span>
+          </button>
           <div class="cp-m-dock-ctrl">
             <button type="button" id="cp-m-prev" class="cp-m-dock-btn" aria-label="上一首">⏮</button>
             <button type="button" id="cp-m-play" class="cp-m-dock-btn cp-m-dock-play" aria-label="播放">▶</button>
             <button type="button" id="cp-m-next" class="cp-m-dock-btn" aria-label="下一首">⏭</button>
+            <button type="button" id="cp-m-dock-queue" class="cp-m-dock-btn" aria-label="查看播放列表" title="播放列表">☰</button>
           </div>
         </div>
         <div class="cp-m-progress">
@@ -956,6 +1017,66 @@
           <span id="cp-m-time-tot" class="cp-m-time">0:00</span>
         </div>
       </div>
+
+      <!-- 手机端歌曲播放页（参考桌面：封面 / 标题 / 进度 / 控件 / 列表入口） -->
+      <section id="cp-m-np-page" class="cp-m-np-page hidden" aria-hidden="true" role="dialog">
+        <div id="cp-m-np-bg" class="cp-m-np-bg" aria-hidden="true"></div>
+        <header class="cp-m-np-top">
+          <button type="button" id="cp-m-np-close" class="cp-m-np-icon-btn" aria-label="收起播放页">⌄</button>
+          <div class="cp-m-np-top-title">
+            <div id="cp-m-np-title" class="cp-m-np-top-main">未播放</div>
+            <div id="cp-m-np-artist" class="cp-m-np-top-sub">选择曲目开始</div>
+          </div>
+        </header>
+        <div class="cp-m-np-cover-wrap">
+          <img id="cp-m-np-cover" class="cp-m-np-cover" alt="" />
+        </div>
+        <div class="cp-m-np-progress">
+          <span id="cp-m-np-time-cur" class="cp-m-time">0:00</span>
+          <input
+            type="range"
+            id="cp-m-np-seek"
+            class="cp-m-seek cp-m-np-seek"
+            min="0"
+            max="1000"
+            value="0"
+            disabled
+            aria-label="进度"
+          />
+          <span id="cp-m-np-time-tot" class="cp-m-time">0:00</span>
+        </div>
+        <div class="cp-m-np-ctrl-row" role="group" aria-label="播放控制">
+          <button type="button" id="cp-m-np-play-mode" class="cp-m-np-tile cp-m-np-tile--mode" title="顺序播放（点击切换）"></button>
+          <button type="button" id="cp-m-np-prev" class="cp-m-np-tile cp-m-np-tile--round" aria-label="上一首">⏮</button>
+          <button type="button" id="cp-m-np-play" class="cp-m-np-tile cp-m-np-tile--main" aria-label="播放">▶</button>
+          <button type="button" id="cp-m-np-next" class="cp-m-np-tile cp-m-np-tile--round" aria-label="下一首">⏭</button>
+          <button type="button" id="cp-m-np-open-queue" class="cp-m-np-tile cp-m-np-tile--list" aria-label="播放列表" title="播放列表">
+            ☰
+          </button>
+        </div>
+      </section>
+
+      <!-- 播放列表底部抽屉 -->
+      <div id="cp-m-queue-backdrop" class="cp-m-queue-backdrop hidden" aria-hidden="true"></div>
+      <section id="cp-m-queue-sheet" class="cp-m-queue-sheet hidden" aria-hidden="true" role="dialog">
+        <div class="cp-m-queue-handle" aria-hidden="true"></div>
+        <header class="cp-m-queue-head">
+          <div class="cp-m-queue-title">
+            播放列表
+            <span id="cp-m-queue-count" class="cp-m-queue-count">0</span>
+          </div>
+          <button type="button" id="cp-m-queue-clear" class="cp-m-queue-clear" title="清空列表">清空</button>
+          <button type="button" id="cp-m-queue-close" class="cp-m-queue-close" aria-label="关闭播放列表">✕</button>
+        </header>
+        <div class="cp-m-queue-toolbar" role="toolbar" aria-label="播放列表操作">
+          <button type="button" id="cp-m-queue-play-mode" class="cp-m-queue-mode-btn" title="顺序播放（点击切换）"></button>
+          <span class="cp-m-queue-toolbar-spacer" aria-hidden="true"></span>
+          <button type="button" id="cp-m-queue-download" class="cp-m-queue-cta cp-m-queue-cta--primary">下载</button>
+          <button type="button" id="cp-m-queue-addto" class="cp-m-queue-cta">添加到</button>
+        </div>
+        <ul id="cp-m-queue-ul" class="cp-m-queue-ul"></ul>
+        <p id="cp-m-queue-empty" class="cp-m-queue-empty hidden">暂无待播曲目 · 在「发现 / 歌单」中选择歌曲即可加入</p>
+      </section>
     </div>
 
     <audio id="audio-player" preload="metadata"></audio>

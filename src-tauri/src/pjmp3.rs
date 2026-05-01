@@ -18,6 +18,22 @@ fn reqwest_err_chain(e: reqwest::Error) -> String {
     s
 }
 
+/// 移动端常见：上一首 `ended` 后立即请求 `song.php` 时 DNS/连接瞬时失败，手动稍后再播又正常。
+fn is_likely_transient_network_err(msg: &str) -> bool {
+    let m = msg.to_lowercase();
+    m.contains("dns error")
+        || m.contains("failed to lookup")
+        || m.contains("no address associated")
+        || m.contains("temporary failure")
+        || m.contains("try again")
+        || m.contains("connection reset")
+        || m.contains("connection refused")
+        || m.contains("timed out")
+        || m.contains("timeout")
+        || m.contains("unreachable")
+        || m.contains("broken pipe")
+}
+
 use log::{info, warn};
 use regex::Regex;
 use scraper::{ElementRef, Html, Selector};
@@ -421,8 +437,7 @@ pub fn preview_cache_path_if_exists(song_id: &str) -> Option<PathBuf> {
     None
 }
 
-pub async fn fetch_song_page_html(client: &reqwest::Client, song_id: &str) -> Result<String, String> {
-    let sid = song_id.trim();
+async fn fetch_song_page_html_once(client: &reqwest::Client, sid: &str) -> Result<String, String> {
     let url = format!(
         "{}/song.php?id={}",
         BASE_URL.trim_end_matches('/'),
@@ -474,6 +489,38 @@ pub async fn fetch_song_page_html(client: &reqwest::Client, song_id: &str) -> Re
         text.len()
     );
     Ok(text)
+}
+
+/// 拉取 song.php HTML；对 DNS/连接类瞬时错误做有限次退避重试（缓解自动切歌后立即请求失败）。
+pub async fn fetch_song_page_html(client: &reqwest::Client, song_id: &str) -> Result<String, String> {
+    let sid = song_id.trim();
+    if sid.is_empty() {
+        return Err("无效的歌曲 ID".to_string());
+    }
+    let mut last = String::new();
+    for attempt in 0u32..4 {
+        match fetch_song_page_html_once(client, sid).await {
+            Ok(h) => return Ok(h),
+            Err(e) => {
+                last = e;
+                if attempt < 3 && is_likely_transient_network_err(&last) {
+                    let ms = 320u64 + 480u64 * u64::from(attempt);
+                    warn!(
+                        target: "pj-play",
+                        "song_page transient_retry sid={} attempt={}/4 err={} sleep_ms={}",
+                        sid,
+                        attempt + 1,
+                        last,
+                        ms
+                    );
+                    tokio::time::sleep(Duration::from_millis(ms)).await;
+                    continue;
+                }
+                return Err(last);
+            }
+        }
+    }
+    Err(last)
 }
 
 fn normalize_media_url(raw: &str) -> String {
@@ -809,7 +856,12 @@ pub async fn cache_preview_audio_file(client: &reqwest::Client, song_id: &str) -
                     e
                 );
                 if round + 1 < ROUNDS {
-                    tokio::time::sleep(Duration::from_millis(240)).await;
+                    let ms = if is_likely_transient_network_err(&e) {
+                        (380u64 + 520u64 * u64::from(round)).min(2800)
+                    } else {
+                        240
+                    };
+                    tokio::time::sleep(Duration::from_millis(ms)).await;
                 }
                 continue;
             }

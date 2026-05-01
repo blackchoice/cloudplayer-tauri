@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "desktop-global-shortcut",
+  "description": "桌面端全局快捷键（tauri-plugin-global-shortcut 在 Android 上不可用，须与 default 能力拆分）",
+  "platforms": ["macOS", "windows", "linux"],
+  "windows": ["main"],
+  "permissions": ["global-shortcut:default"]
+}

@@ -4,7 +4,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Runtime};
+use tauri::{AppHandle, Runtime};
+#[cfg(desktop)]
+use tauri::Emitter;
 
 use crate::config::GlobalHotkeys;
 
