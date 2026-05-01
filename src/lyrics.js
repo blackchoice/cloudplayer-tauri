@@ -76,6 +76,8 @@ export function lyricDisplayForDesktop(ct) {
   }
   let idx = 0;
   for (let k = 0; k < appState.lrcEntries.length; k++) {
+    const nextT = k + 1 < appState.lrcEntries.length ? appState.lrcEntries[k + 1].t : Infinity;
+    if (t + 0.12 >= nextT) { idx = k + 1; continue; }
     if (appState.lrcEntries[k].t <= t + 0.12) idx = k;
     else break;
   }
