@@ -89,9 +89,11 @@ export function lyricDisplayForDesktop(ct) {
   if (idx % 2 === 0) {
     const line1 = curLine?.text || "—";
     const line2 = nextLine?.text || " ";
+    const nextNextLine = appState.lrcEntries[idx + 2];
+    const line2EndT = nextNextLine ? nextNextLine.t : endT + 4;
     return {
       line1, line2, activeSlot: 1,
-      line1StartT: startT, line1EndT: endT, line2StartT: 0, line2EndT: 0,
+      line1StartT: startT, line1EndT: endT, line2StartT: endT, line2EndT,
       line1Words: wl?.[idx] ?? null,
       line2Words: nextLine ? wl?.[idx + 1] ?? null : null,
       audioNow: t,
@@ -101,7 +103,7 @@ export function lyricDisplayForDesktop(ct) {
   const line2 = curLine?.text || "—";
   return {
     line1, line2, activeSlot: 2,
-    line1StartT: 0, line1EndT: 0, line2StartT: startT, line2EndT: endT,
+    line1StartT: prevLine?.t ?? 0, line1EndT: startT, line2StartT: startT, line2EndT: endT,
     line1Words: prevLine ? wl?.[idx - 1] ?? null : null,
     line2Words: wl?.[idx] ?? null,
     audioNow: t,

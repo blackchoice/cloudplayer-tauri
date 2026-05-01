@@ -123,7 +123,6 @@ function animateLyrics() {
     const {
       line1,
       line2,
-      activeSlot,
       line1StartT,
       line1EndT,
       line2StartT,
@@ -133,19 +132,22 @@ function animateLyrics() {
       audioNow,
       receivedAtMs,
     } = lyAnchor;
-    const slot = activeSlot === 2 ? 2 : 1;
     rebuildLineSpans("line1", line1, line1Words);
     rebuildLineSpans("line2", line2, line2Words);
     const elapsed = (Date.now() - receivedAtMs) / 1000;
     const t = audioNow + elapsed;
 
-    if (slot === 1) {
-      const useW1 =
-        line1Words?.words?.length && wordsJoinForTiming(line1Words) === line1;
-      if (
-        !useW1 ||
-        !colorLineWords("line1", line1Words, t)
-      ) {
+    // Determine which line is currently being sung based on time
+    const l1Active = line1StartT > 0 && t >= line1StartT && t < line1EndT;
+    const l1Done = line1EndT > 0 && t >= line1EndT;
+    const l2Active = line2StartT > 0 && t >= line2StartT && t < line2EndT;
+    const l2Done = line2EndT > 0 && t >= line2EndT;
+
+    // Line 1 coloring
+    if (l1Active) {
+      // Currently singing line 1
+      const useW1 = line1Words?.words?.length && wordsJoinForTiming(line1Words) === line1;
+      if (!useW1 || !colorLineWords("line1", line1Words, t)) {
         const dur = line1EndT - line1StartT;
         const p = dur > 0 ? Math.min(1, Math.max(0, (t - line1StartT) / dur)) : 1;
         const spans1 = document.getElementById("line1")?.children ?? [];
@@ -155,15 +157,16 @@ function animateLyrics() {
           spans1[i].style.color = charColor(charP);
         }
       }
-      setSpansUniform("line2", 0);
-    } else {
+    } else if (l1Done) {
       setSpansUniform("line1", 1);
-      const useW2 =
-        line2Words?.words?.length && wordsJoinForTiming(line2Words) === line2;
-      if (
-        !useW2 ||
-        !colorLineWords("line2", line2Words, t)
-      ) {
+    } else {
+      setSpansUniform("line1", 0);
+    }
+
+    // Line 2 coloring
+    if (l2Active) {
+      const useW2 = line2Words?.words?.length && wordsJoinForTiming(line2Words) === line2;
+      if (!useW2 || !colorLineWords("line2", line2Words, t)) {
         const dur = line2EndT - line2StartT;
         const p = dur > 0 ? Math.min(1, Math.max(0, (t - line2StartT) / dur)) : 1;
         const spans2 = document.getElementById("line2")?.children ?? [];
@@ -173,6 +176,10 @@ function animateLyrics() {
           spans2[i].style.color = charColor(charP);
         }
       }
+    } else if (l2Done) {
+      setSpansUniform("line2", 1);
+    } else {
+      setSpansUniform("line2", 0);
     }
   }
   requestAnimationFrame(animateLyrics);
