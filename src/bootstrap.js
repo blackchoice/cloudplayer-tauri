@@ -29,8 +29,13 @@ async function init() {
     app.hidden = true;
     app.setAttribute("inert", "");
     mob.hidden = false;
-    const { startMobileApp } = await import("./mobile-ui.js");
-    startMobileApp();
+    try {
+      const { startMobileApp } = await import("./mobile-ui.js");
+      startMobileApp();
+    } catch (err) {
+      console.error("[bootstrap] mobile-ui import/start failed:", err);
+      mob.innerHTML = `<div style="padding:24px;color:#c00;font-size:14px;word-break:break-all"><b>启动失败</b><pre style="white-space:pre-wrap">${String(err?.stack || err)}</pre></div>`;
+    }
   } else {
     const { startDesktop } = await import("./main.js");
     startDesktop();
