@@ -6,7 +6,9 @@ async function init() {
     const p = platform();
     isMobileShell = p === "android" || p === "ios";
   } catch {
-    isMobileShell = false;
+    // plugin-os 不可用时（如 __TAURI_OS_PLUGIN_INTERNALS__ 未注入），用 UA 兜底
+    const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
+    isMobileShell = /Android|iPhone|iPad|iPod/i.test(ua);
   }
 
   // 浏览器仅看 UI：http://localhost:1420/?cp_mobile=1（无后端，列表/搜索会提示需在 App 内使用）

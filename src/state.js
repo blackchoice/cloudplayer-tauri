@@ -85,6 +85,7 @@ export const appState = {
     action: "ask",
     base: "#ffffff",
     highlight: "#ffb7d4",
+    fontFamily: "",
     neteaseApiBase: "",
     hotkeysSig: "",
   },

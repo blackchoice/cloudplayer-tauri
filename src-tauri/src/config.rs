@@ -122,6 +122,15 @@ pub struct Settings {
     /// 桌面歌词已唱字色（#RRGGBB）
     #[serde(default = "default_desktop_lyrics_color_highlight")]
     pub desktop_lyrics_color_highlight: String,
+    /// 桌面歌词字体族名，空字符串表示使用系统默认字体栈
+    #[serde(default)]
+    pub desktop_lyrics_font_family: String,
+    /// 上次播放队列（JSON 字符串），空字符串表示无队列
+    #[serde(default)]
+    pub last_play_queue_json: String,
+    /// 上次播放队列中的当前曲目索引
+    #[serde(default)]
+    pub last_play_index: i64,
 }
 
 fn default_volume() -> f64 {
@@ -205,6 +214,9 @@ impl Default for Settings {
             global_hotkeys: GlobalHotkeys::default(),
             desktop_lyrics_color_base: default_desktop_lyrics_color_base(),
             desktop_lyrics_color_highlight: default_desktop_lyrics_color_highlight(),
+            desktop_lyrics_font_family: String::new(),
+            last_play_queue_json: String::new(),
+            last_play_index: 0,
         }
     }
 }

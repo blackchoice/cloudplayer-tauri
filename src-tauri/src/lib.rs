@@ -88,28 +88,6 @@ pub fn run() {
                 init_android_storage(app)?;
             }
 
-            // Create the main window programmatically with an absolute WebView2 data directory,
-            // so the app works when installed in a read-only location (e.g. D:\Program Files).
-            // A relative dataDirectory would resolve against the exe directory and fail without elevation.
-            let webview_data = app
-                .path()
-                .app_data_dir()
-                .unwrap_or_else(|_| std::env::temp_dir())
-                .join("webview2");
-            let _ = std::fs::create_dir_all(&webview_data);
-            #[cfg(desktop)]
-            {
-                use tauri::webview::WebviewWindowBuilder;
-                let _win = WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default())
-                    .title("CloudPlayer")
-                    .inner_size(1100.0, 700.0)
-                    .resizable(true)
-                    .decorations(false)
-                    .shadow(true)
-                    .data_directory(webview_data)
-                    .build();
-            }
-
             if let Err(e) = logging::init_from_app(app.handle()) {
                 eprintln!("CloudPlayer: file logging init failed: {e}");
             }
@@ -211,53 +189,53 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            commands::get_settings,
-            commands::get_global_hotkeys,
-            commands::apply_global_hotkeys,
-            commands::validate_accelerator,
-            commands::get_default_download_dir,
-            commands::set_desktop_lyrics_click_through,
-            commands::hide_main_window,
-            commands::show_main_window,
-            commands::quit_app,
-            commands::local_path_accessible,
-            commands::save_settings,
-            commands::db_status,
-            commands::get_app_log_path,
-            commands::read_file_bytes,
-            commands::search_songs,
-            commands::get_preview_url,
-            commands::cache_preview_for_play,
-            commands::resolve_online_play,
-            commands::log_play_event,
-            commands::parse_import_text,
-            commands::list_playlists,
-            commands::list_playlists_summary,
-            commands::list_playlist_import_items,
-            commands::create_playlist,
-            commands::rename_playlist,
-            commands::delete_playlist,
-            commands::ensure_favorites_playlist,
-            commands::add_to_favorites,
-            commands::remove_from_favorites,
-            commands::delete_playlist_import_item,
-            commands::replace_playlist_import_items,
-            commands::append_playlist_import_items,
-            commands::start_import_enrich,
-            commands::try_fill_playlist_item_source_id,
-            commands::fetch_song_lrc,
-            commands::fetch_song_lrc_enriched,
-            commands::fetch_lrc_cx_cover,
-            commands::lyrics_search_candidates,
-            commands::lyrics_fetch_candidate,
-            commands::fetch_share_playlist,
-            commands::list_local_songs,
-            commands::list_downloaded_songs,
-            commands::delete_downloaded_song,
-            commands::scan_music_folder,
-            commands::list_recent_plays,
-            commands::record_recent_play,
-            commands::enqueue_download,
+            commands::settings_cmd::get_settings,
+            commands::settings_cmd::get_global_hotkeys,
+            commands::settings_cmd::apply_global_hotkeys,
+            commands::settings_cmd::validate_accelerator,
+            commands::settings_cmd::get_default_download_dir,
+            commands::settings_cmd::save_settings,
+            commands::window_cmd::set_desktop_lyrics_click_through,
+            commands::window_cmd::hide_main_window,
+            commands::window_cmd::show_main_window,
+            commands::window_cmd::quit_app,
+            commands::search_cmd::search_songs,
+            commands::search_cmd::get_preview_url,
+            commands::search_cmd::cache_preview_for_play,
+            commands::play_resolve_cmd::resolve_online_play,
+            commands::playlist_cmd::list_playlists,
+            commands::playlist_cmd::list_playlists_summary,
+            commands::playlist_cmd::list_playlist_import_items,
+            commands::playlist_cmd::create_playlist,
+            commands::playlist_cmd::rename_playlist,
+            commands::playlist_cmd::delete_playlist,
+            commands::playlist_cmd::delete_playlist_import_item,
+            commands::playlist_cmd::replace_playlist_import_items,
+            commands::playlist_cmd::append_playlist_import_items,
+            commands::playlist_cmd::start_import_enrich,
+            commands::playlist_cmd::try_fill_playlist_item_source_id,
+            commands::favorites_cmd::ensure_favorites_playlist,
+            commands::favorites_cmd::add_to_favorites,
+            commands::favorites_cmd::remove_from_favorites,
+            commands::lyrics_cmd::fetch_song_lrc,
+            commands::lyrics_cmd::fetch_song_lrc_enriched,
+            commands::lyrics_cmd::fetch_lrc_cx_cover,
+            commands::lyrics_cmd::lyrics_search_candidates,
+            commands::lyrics_cmd::lyrics_fetch_candidate,
+            commands::download_cmd::enqueue_download,
+            commands::download_cmd::list_downloaded_songs,
+            commands::download_cmd::delete_downloaded_song,
+            commands::library_cmd::list_local_songs,
+            commands::library_cmd::scan_music_folder,
+            commands::recent_cmd::list_recent_plays,
+            commands::recent_cmd::record_recent_play,
+            commands::util_cmd::db_status,
+            commands::util_cmd::log_play_event,
+            commands::util_cmd::read_file_bytes,
+            commands::util_cmd::local_path_accessible,
+            commands::util_cmd::get_app_log_path,
+            commands::util_cmd::parse_import_text,
+            commands::util_cmd::fetch_share_playlist,
         ])
         .run(tauri::generate_context!())
         .expect("error while running CloudPlayer (Tauri)");

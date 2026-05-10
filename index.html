@@ -455,6 +455,12 @@
                     /></label>
                   </div>
                 </div>
+                <div class="settings-field">
+                  <label for="setting-ly-font" class="settings-field-label">桌面歌词字体</label>
+                  <select id="setting-ly-font" class="import-select import-select--wide settings-field-control">
+                    <option value="">系统默认</option>
+                  </select>
+                </div>
                 <div class="settings-toolbar-actions">
                   <button type="button" class="settings-back-btn" id="btn-settings-back">← 返回</button>
                   <button type="button" class="settings-save-btn" id="settings-save" disabled aria-disabled="true">
@@ -882,6 +888,21 @@
         </div>
         <ul class="cp-m-addto-list" id="cp-m-addto-ul"></ul>
       </div>
+
+      <section id="cp-m-addto-page" class="cp-m-addto-page hidden" aria-label="添加到歌单">
+        <header class="cp-m-addto-page-head">
+          <button type="button" id="cp-m-addto-page-back" class="cp-m-pl-back" aria-label="返回">← 返回</button>
+          <h2 class="cp-m-addto-page-title">添加到歌单</h2>
+          <button type="button" id="cp-m-addto-page-toggle" class="cp-m-addto-page-toggle">全不选</button>
+        </header>
+        <ul id="cp-m-addto-page-songs" class="cp-m-addto-page-songs"></ul>
+        <div class="cp-m-addto-page-divider"></div>
+        <div class="cp-m-addto-page-playlists-head">
+          <span>选择歌单</span>
+          <button type="button" id="cp-m-addto-page-new" class="cp-m-addto-new-btn">新建歌单</button>
+        </div>
+        <ul id="cp-m-addto-page-pls" class="cp-m-addto-page-pls"></ul>
+      </section>
 
       <div id="cp-m-dl-quality-panel" class="cp-m-dl-quality-panel hidden" role="dialog" aria-modal="true" aria-label="选择音质">
         <div class="cp-m-dl-quality-inner">

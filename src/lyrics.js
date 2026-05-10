@@ -139,6 +139,18 @@ export async function broadcastDesktopLyricsColors() {
   }
 }
 
+export async function broadcastDesktopLyricsFont() {
+  if (!appState.desktopLyricsOpen) return;
+  try {
+    const s = await invoke("get_settings");
+    await emitTo(LYRICS_WW_TARGET, "desktop-lyrics-font", {
+      fontFamily: s.desktop_lyrics_font_family ?? s.desktopLyricsFontFamily ?? "",
+    });
+  } catch (e) {
+    console.warn("emit desktop-lyrics-font", e);
+  }
+}
+
 export function refreshLyricsLockMenuLabel() {
   const btn = document.getElementById("btn-more-lyrics-lock");
   if (!btn) return;
@@ -283,6 +295,7 @@ export function scheduleDesktopLyricsStyleSync() {
   queueMicrotask(() => {
     void broadcastDesktopLyricsLock();
     void broadcastDesktopLyricsColors();
+    void broadcastDesktopLyricsFont();
   });
 }
 

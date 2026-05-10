@@ -1053,6 +1053,20 @@ export async function loadSettings() {
       appState.lastLibraryFolder = s.last_library_folder.trim();
     }
     await refreshDownloadFolderHint();
+    // Restore persisted play queue (do NOT auto-play)
+    if (s?.last_play_queue_json && typeof s.last_play_queue_json === "string" && s.last_play_queue_json.trim()) {
+      try {
+        const parsed = JSON.parse(s.last_play_queue_json);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          appState.playQueue = parsed;
+          const idx = Number(s.last_play_index) || 0;
+          appState.playIndex = Math.max(0, Math.min(idx, parsed.length - 1));
+          renderQueuePanel();
+        }
+      } catch (e) {
+        console.warn("restore play queue", e);
+      }
+    }
     const { refreshLyricsLockMenuLabel, scheduleDesktopLyricsStyleSync, openDesktopLyricsFromSettingsIfNeeded } = await import("./lyrics.js");
     refreshLyricsLockMenuLabel();
     if (appState.desktopLyricsOpen) {

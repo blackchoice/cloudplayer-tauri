@@ -150,6 +150,42 @@ function onHotkeyCaptureKeydown(btn, statusEl) {
 
 // ── 设置表单 ──
 
+async function populateFontSelect(selectEl) {
+  if (!selectEl) return;
+  let fonts = [];
+  try {
+    if (typeof window.queryLocalFonts === "function") {
+      const fontHandles = await window.queryLocalFonts();
+      const familySet = new Set();
+      for (const handle of fontHandles) {
+        familySet.add(handle.family);
+      }
+      fonts = [...familySet].sort((a, b) => a.localeCompare(b));
+    }
+  } catch (e) {
+    console.warn("queryLocalFonts unavailable:", e);
+  }
+  if (fonts.length === 0) {
+    fonts = [
+      "Segoe UI", "Microsoft YaHei UI", "PingFang SC",
+      "Noto Sans SC", "Noto Sans CJK SC", "Arial", "Helvetica",
+      "Times New Roman", "Georgia", "Consolas", "Courier New",
+      "system-ui", "sans-serif", "serif", "monospace",
+    ];
+  }
+  const current = selectEl.value;
+  while (selectEl.options.length > 1) selectEl.remove(1);
+  for (const name of fonts) {
+    const opt = document.createElement("option");
+    opt.value = name;
+    opt.textContent = name;
+    selectEl.appendChild(opt);
+  }
+  if (current && [...selectEl.options].some((o) => o.value === current)) {
+    selectEl.value = current;
+  }
+}
+
 export function fillSettingsFormFromSettings(s) {
   if (!s) return;
   const action = normalizeCloseAction(s.main_window_close_action ?? s.mainWindowCloseAction);
@@ -165,6 +201,8 @@ export function fillSettingsFormFromSettings(s) {
   if (hlInput) hlInput.value = highlight;
   const apiInput = document.getElementById("setting-netease-api-base");
   if (apiInput) apiInput.value = neteaseApiBase;
+  const fontSelect = document.getElementById("setting-ly-font");
+  if (fontSelect) fontSelect.value = s.desktop_lyrics_font_family ?? s.desktopLyricsFontFamily ?? "";
 
   fillHotkeysFormFromSettings(s);
   syncSettingsFormBaselineFromDom();
@@ -198,6 +236,7 @@ function getSettingsFormValues() {
   const base = document.getElementById("setting-ly-base")?.value || "#ffffff";
   const highlight = document.getElementById("setting-ly-highlight")?.value || "#ffb7d4";
   const neteaseApiBase = document.getElementById("setting-netease-api-base")?.value?.trim() || "";
+  const fontFamily = document.getElementById("setting-ly-font")?.value || "";
 
   const hotkeys = {};
   const defs = [
@@ -213,7 +252,7 @@ function getSettingsFormValues() {
     if (accel) hotkeys[def.key] = accel;
   }
 
-  return { action, base, highlight, neteaseApiBase, hotkeys };
+  return { action, base, highlight, neteaseApiBase, fontFamily, hotkeys };
 }
 
 function settingsFormIsDirty() {
@@ -223,6 +262,7 @@ function settingsFormIsDirty() {
   if (cur.base !== bl.base) return true;
   if (cur.highlight !== bl.highlight) return true;
   if (cur.neteaseApiBase !== bl.neteaseApiBase) return true;
+  if (cur.fontFamily !== bl.fontFamily) return true;
   const curSig = JSON.stringify(cur.hotkeys);
   return curSig !== bl.hotkeysSig;
 }
@@ -234,6 +274,7 @@ function syncSettingsFormBaselineFromDom() {
     base: cur.base,
     highlight: cur.highlight,
     neteaseApiBase: cur.neteaseApiBase,
+    fontFamily: cur.fontFamily,
     hotkeysSig: JSON.stringify(cur.hotkeys),
   };
 }
@@ -280,7 +321,7 @@ async function runCloseChoice(choice) {
 
 export function wireSettingsFormDirtyTracking() {
   const inputs = document.querySelectorAll(
-    '.settings-form #setting-close-action, #setting-ly-base, #setting-ly-highlight, #setting-netease-api-base'
+    '.settings-form #setting-close-action, #setting-ly-base, #setting-ly-highlight, #setting-netease-api-base, #setting-ly-font'
   );
   inputs.forEach((el) => {
     el.addEventListener("input", updateSettingsSaveButtonState);
@@ -320,6 +361,7 @@ export function wireHotkeySettingsUi() {
 }
 
 export function wirePreferencesModals() {
+  populateFontSelect(document.getElementById("setting-ly-font"));
   wireSettingsFormDirtyTracking();
   wireHotkeySettingsUi();
 
@@ -331,6 +373,7 @@ export function wirePreferencesModals() {
           main_window_close_action: cur.action,
           desktop_lyrics_color_base: cur.base,
           desktop_lyrics_color_highlight: cur.highlight,
+          desktop_lyrics_font_family: cur.fontFamily,
           netease_api_base: cur.neteaseApiBase,
           global_hotkeys: cur.hotkeys,
         },

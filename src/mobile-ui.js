@@ -433,6 +433,8 @@ const DETAIL_LONG_MS = 520;
 
 // ─── Android 物理返回键统一处理 ────────────────────────────────────────────
 function androidBackInternal() {
+  const addToPage = document.getElementById("cp-m-addto-page");
+  if (addToPage && !addToPage.classList.contains("hidden")) { closeAddToPage(); return true; }
   const addTo = document.getElementById("cp-m-addto-panel");
   if (addTo && !addTo.classList.contains("hidden")) { closeAddToPanel(); return true; }
   const dlQ = document.getElementById("cp-m-dl-quality-panel");
@@ -1180,6 +1182,7 @@ async function refreshRecent() {
       invalidateMobilePrefetch();
       playQueue = queue;
       void playFromQueueIndex(j);
+      void saveQueueToSettings();
     });
     row.appendChild(card);
   });
@@ -1365,6 +1368,7 @@ function wirePlaylistDetailTrackRow(li, r, i, rows) {
       import_item_id: row.id != null ? row.id : null,
     }));
     void playFromQueueIndex(i);
+    void saveQueueToSettings();
   });
 }
 
@@ -1385,6 +1389,110 @@ function openDlQualityPanel(rowsOverride = null) {
 function closeAddToPanel() {
   addToPanelPinnedRows = null;
   document.getElementById("cp-m-addto-panel")?.classList.add("hidden");
+}
+
+function openAddToPage() {
+  const page = document.getElementById("cp-m-addto-page");
+  const songsUl = document.getElementById("cp-m-addto-page-songs");
+  const plsUl = document.getElementById("cp-m-addto-page-pls");
+  if (!page || !songsUl || !plsUl) return;
+
+  const rows = playQueueToBatchRows();
+  if (!rows.length) {
+    alert("播放列表为空。");
+    return;
+  }
+
+  // Render song checklist (all checked by default)
+  songsUl.innerHTML = "";
+  rows.forEach((r, i) => {
+    const li = document.createElement("li");
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = true;
+    cb.dataset.index = String(i);
+    const info = document.createElement("div");
+    info.className = "cp-m-addto-page-song-info";
+    const title = document.createElement("div");
+    title.className = "cp-m-addto-page-song-title";
+    title.textContent = r.title || "—";
+    const sub = document.createElement("div");
+    sub.className = "cp-m-addto-page-song-sub";
+    sub.textContent = r.artist || "";
+    info.appendChild(title);
+    info.appendChild(sub);
+    li.appendChild(cb);
+    li.appendChild(info);
+    songsUl.appendChild(li);
+  });
+
+  // Toggle all button
+  const toggleBtn = document.getElementById("cp-m-addto-page-toggle");
+  if (toggleBtn) {
+    toggleBtn.textContent = "全不选";
+    toggleBtn.onclick = () => {
+      const checkboxes = songsUl.querySelectorAll('input[type="checkbox"]');
+      const allChecked = Array.from(checkboxes).every((cb) => cb.checked);
+      checkboxes.forEach((cb) => { cb.checked = !allChecked; });
+      toggleBtn.textContent = allChecked ? "全选" : "全不选";
+    };
+  }
+
+  // Fetch and render playlists
+  plsUl.innerHTML = "";
+  void (async () => {
+    let pls = [];
+    try {
+      pls = await invoke("list_playlists");
+    } catch (e) {
+      console.warn("list_playlists", e);
+      return;
+    }
+    const cur = openPlaylistCtx?.id;
+    for (const p of pls) {
+      const pid = Number(p.id);
+      if (!Number.isFinite(pid)) continue;
+      if (cur != null && pid === cur) continue;
+      const li = document.createElement("li");
+      const plName = String(p.name || "").trim() || `歌单 ${pid}`;
+      li.textContent = plName;
+      li.addEventListener("click", async () => {
+        const checkedIndices = [];
+        songsUl.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+          if (cb.checked) checkedIndices.push(Number(cb.dataset.index));
+        });
+        if (!checkedIndices.length) {
+          alert("请至少选择一首歌曲。");
+          return;
+        }
+        const selectedRows = checkedIndices.map((i) => rows[i]).filter(Boolean);
+        const items = mapRowsToAppendItems(selectedRows);
+        if (!items.length) return;
+        try {
+          await invoke("append_playlist_import_items", { playlistId: pid, items });
+          closeAddToPage();
+          alert(`已添加 ${items.length} 首到「${plName}」`);
+          void refreshPlaylists();
+        } catch (e) {
+          console.warn("append_playlist_import_items", e);
+          alert(`添加失败：${errText(e)}`);
+        }
+      });
+      plsUl.appendChild(li);
+    }
+    if (!plsUl.children.length) {
+      const li = document.createElement("li");
+      li.textContent = "暂无其它歌单";
+      li.style.cursor = "default";
+      plsUl.appendChild(li);
+    }
+  })();
+
+  page.classList.remove("hidden");
+}
+
+function closeAddToPage() {
+  document.getElementById("cp-m-addto-page")?.classList.add("hidden");
 }
 
 function getAddToPanelRows() {
@@ -1669,6 +1777,7 @@ function wireSearchResultRow(li, r, i, results) {
       cover_url: x.cover_url || null,
     }));
     void playFromQueueIndex(i);
+    void saveQueueToSettings();
     closeSearchPanel();
   });
 }
@@ -2132,6 +2241,17 @@ function closeQueueSheet() {
   back.setAttribute("aria-hidden", "true");
 }
 
+async function saveQueueToSettings() {
+  try {
+    const json = JSON.stringify(playQueue);
+    await invoke("save_settings", {
+      patch: { last_play_queue_json: json, last_play_index: playIndex },
+    });
+  } catch (e) {
+    console.warn("saveQueueToSettings", e);
+  }
+}
+
 function clearQueue() {
   if (!playQueue.length) return;
   if (!window.confirm("确定清空播放列表？当前曲目仍会继续播放，直到结束。")) return;
@@ -2148,6 +2268,7 @@ function clearQueue() {
   }
   renderQueueSheet();
   syncMobilePlayerNav();
+  void saveQueueToSettings();
 }
 
 function wireNowPlayingAndQueue() {
@@ -2175,12 +2296,7 @@ function wireNowPlayingAndQueue() {
     openDlQualityPanel(rows);
   });
   document.getElementById("cp-m-queue-addto")?.addEventListener("click", () => {
-    const rows = playQueueToBatchRows();
-    if (!rows.length) {
-      alert("播放列表为空。");
-      return;
-    }
-    void openAddToPanel({ rows });
+    openAddToPage();
   });
   document.getElementById("cp-m-dock-queue")?.addEventListener("click", () => {
     openQueueSheet();
@@ -2205,6 +2321,25 @@ export function startMobileApp() {
   setChrome({ title: "未播放", sub: "选择曲目开始", coverUrl: null });
   const c = document.getElementById("cp-m-dock-cover");
   if (c) c.src = PLACEHOLDER_COVER;
+
+  // Restore persisted play queue (do NOT auto-play)
+  void (async () => {
+    try {
+      const s = await invoke("get_settings");
+      if (s?.last_play_queue_json && typeof s.last_play_queue_json === "string" && s.last_play_queue_json.trim()) {
+        const parsed = JSON.parse(s.last_play_queue_json);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          playQueue = parsed;
+          const idx = Number(s.last_play_index) || 0;
+          playIndex = Math.max(0, Math.min(idx, parsed.length - 1));
+          renderQueueSheet();
+          syncMobilePlayerNav();
+        }
+      }
+    } catch (e) {
+      console.warn("restore play queue", e);
+    }
+  })();
 
   document.getElementById("cp-m-pl-back")?.addEventListener("click", () => {
     if (detailSelectMode) exitDetailSelectMode();
@@ -2248,6 +2383,20 @@ export function startMobileApp() {
       void refreshPlaylists();
     } catch (e) {
       console.warn("create_playlist / append", e);
+      alert(`失败：${errText(e)}`);
+    }
+  });
+  document.getElementById("cp-m-addto-page-back")?.addEventListener("click", () => closeAddToPage());
+  document.getElementById("cp-m-addto-page-new")?.addEventListener("click", async () => {
+    const name = window.prompt("新歌单名称", "新歌单");
+    if (!name || !name.trim()) return;
+    try {
+      const pid = await invoke("create_playlist", { name: name.trim() });
+      closeAddToPage();
+      openAddToPage();
+      alert(`已创建「${name.trim()}」，请点击歌单名称添加歌曲。`);
+    } catch (e) {
+      console.warn("create_playlist", e);
       alert(`失败：${errText(e)}`);
     }
   });

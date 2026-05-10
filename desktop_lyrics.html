@@ -11,6 +11,7 @@
         --ly-scale: 1;
         --ly-pt: calc(20pt * var(--ly-scale));
         --ly-text: #ffffff;
+        --ly-font: "Segoe UI", system-ui, "Microsoft YaHei UI", "PingFang SC", sans-serif;
       }
       html {
         margin: 0;
@@ -27,7 +28,7 @@
         overflow: hidden;
         background: transparent !important;
         border-radius: var(--ly-radius);
-        font-family: "Segoe UI", system-ui, "Microsoft YaHei UI", "PingFang SC", sans-serif;
+        font-family: var(--ly-font);
         user-select: none;
         -webkit-user-select: none;
       }

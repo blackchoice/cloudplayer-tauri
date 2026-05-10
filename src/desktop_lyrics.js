@@ -36,6 +36,15 @@ function applyLyricColors(baseHex, highlightHex) {
   if (h) hiRgb = h;
 }
 
+const DEFAULT_FONT_STACK = '"Segoe UI", system-ui, "Microsoft YaHei UI", "PingFang SC", sans-serif';
+
+function applyLyricsFont(fontFamily) {
+  const value = fontFamily && fontFamily.trim()
+    ? `"${fontFamily.trim()}", ${DEFAULT_FONT_STACK}`
+    : DEFAULT_FONT_STACK;
+  document.documentElement.style.setProperty("--ly-font", value);
+}
+
 /** 未唱色 → 已唱色，逐字 t∈[0,1] */
 function charColor(t) {
   return `rgb(${lerp255(baseRgb.r, hiRgb.r, t)},${lerp255(baseRgb.g, hiRgb.g, t)},${lerp255(baseRgb.b, hiRgb.b, t)})`;
@@ -263,6 +272,7 @@ async function initLyricsWindow() {
       s?.desktop_lyrics_color_base ?? s?.desktopLyricsColorBase ?? "#ffffff",
       s?.desktop_lyrics_color_highlight ?? s?.desktopLyricsColorHighlight ?? "#ffb7d4"
     );
+    applyLyricsFont(s?.desktop_lyrics_font_family ?? s?.desktopLyricsFontFamily ?? "");
   } catch (e) {
     console.warn("get_settings fail", e);
     applyLyricsLockUi(true);
@@ -271,6 +281,11 @@ async function initLyricsWindow() {
   await lyricsWin.listen("desktop-lyrics-colors", (e) => {
     const p = e?.payload ?? {};
     applyLyricColors(p.base ?? "#ffffff", p.highlight ?? "#ffb7d4");
+  });
+
+  await lyricsWin.listen("desktop-lyrics-font", (e) => {
+    const p = e?.payload ?? {};
+    applyLyricsFont(p.fontFamily ?? "");
   });
 
   await lyricsWin.listen("desktop-lyrics-lines", (e) => {

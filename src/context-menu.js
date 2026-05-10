@@ -11,6 +11,7 @@ import {
   listPlaylistsCached,
   enqueueDownloadForTrack,
 } from "./utils.js";
+import { saveQueueToSettings } from "./player.js";
 
 /** @type {{ playFromQueueIndex: Function, renderQueuePanel: Function, refreshSidebarPlaylists: Function, refreshPlaylistSelect: Function, loadPlaylistDetail: Function, refreshDownloadedSongsTable: Function, setPage: Function }} */
 let _deps = {};
@@ -165,6 +166,7 @@ export function buildAddToSubmenu(t) {
       }
       appState.playQueue.push(qItem);
       _deps.renderQueuePanel();
+      void saveQueueToSettings();
     })
   );
   sub.appendChild(
@@ -182,6 +184,7 @@ export function buildAddToSubmenu(t) {
       }
       appState.playQueue.push(qItem);
       _deps.renderQueuePanel();
+      void saveQueueToSettings();
     })
   );
   sub.appendChild(cmSep());
@@ -222,6 +225,7 @@ export async function openSearchRowContextMenu(ev, rowIdx) {
         appState.playQueue.splice(appState.playIndex + 1, 0, qItem);
       }
       _deps.renderQueuePanel();
+      void saveQueueToSettings();
     })
   );
   root.appendChild(cmSep());
@@ -307,6 +311,7 @@ export async function openSidebarPlaylistContextMenu(ev, pl) {
       }));
       _deps.playFromQueueIndex(0);
       _deps.renderQueuePanel();
+      void saveQueueToSettings();
     })
   );
   if (!isFav) {
@@ -353,6 +358,7 @@ export async function openPlaylistDetailRowContextMenu(ev, rowIdx) {
       appState.playQueue = [item];
       void _deps.playFromQueueIndex(0);
       _deps.renderQueuePanel();
+      void saveQueueToSettings();
     })
   );
   root.appendChild(
@@ -363,6 +369,7 @@ export async function openPlaylistDetailRowContextMenu(ev, rowIdx) {
       } else {
         appState.playQueue.splice(appState.playIndex + 1, 0, item);
         _deps.renderQueuePanel();
+        void saveQueueToSettings();
       }
     })
   );
@@ -464,6 +471,7 @@ export async function openDownloadedSongRowContextMenu(ev, rowIdx) {
         appState.playQueue = [item];
         void _deps.playFromQueueIndex(0);
         _deps.renderQueuePanel();
+        void saveQueueToSettings();
       },
       !pathOk
     )
@@ -483,6 +491,7 @@ export async function openDownloadedSongRowContextMenu(ev, rowIdx) {
           appState.playQueue.splice(appState.playIndex + 1, 0, item);
         }
         _deps.renderQueuePanel();
+        void saveQueueToSettings();
       },
       !pathOk
     )
@@ -504,6 +513,7 @@ export async function openDownloadedSongRowContextMenu(ev, rowIdx) {
       }
       appState.playQueue.push(item);
       _deps.renderQueuePanel();
+      void saveQueueToSettings();
     })
   );
   sub.appendChild(
@@ -514,6 +524,7 @@ export async function openDownloadedSongRowContextMenu(ev, rowIdx) {
       }
       appState.playQueue.push(item);
       _deps.renderQueuePanel();
+      void saveQueueToSettings();
     })
   );
   sub.appendChild(cmSep());
@@ -619,6 +630,7 @@ export async function openLocalLibraryRowContextMenu(ev, rowIdx) {
         appState.playQueue = [item];
         void _deps.playFromQueueIndex(0);
         _deps.renderQueuePanel();
+        void saveQueueToSettings();
       },
       !pathOk
     )
@@ -638,6 +650,7 @@ export async function openLocalLibraryRowContextMenu(ev, rowIdx) {
           appState.playQueue.splice(appState.playIndex + 1, 0, item);
         }
         _deps.renderQueuePanel();
+        void saveQueueToSettings();
       },
       !pathOk
     )
@@ -659,6 +672,7 @@ export async function openLocalLibraryRowContextMenu(ev, rowIdx) {
       }
       appState.playQueue.push(item);
       _deps.renderQueuePanel();
+      void saveQueueToSettings();
     })
   );
   sub.appendChild(
@@ -669,6 +683,7 @@ export async function openLocalLibraryRowContextMenu(ev, rowIdx) {
       }
       appState.playQueue.push(item);
       _deps.renderQueuePanel();
+      void saveQueueToSettings();
     })
   );
   sub.appendChild(cmSep());

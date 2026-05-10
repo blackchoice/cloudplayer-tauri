@@ -59,6 +59,19 @@ export function renderQueuePanel() {
   });
 }
 
+// ── Queue Persistence ──
+
+export async function saveQueueToSettings() {
+  try {
+    const json = JSON.stringify(appState.playQueue);
+    await invoke("save_settings", {
+      patch: { last_play_queue_json: json, last_play_index: appState.playIndex },
+    });
+  } catch (e) {
+    console.warn("saveQueueToSettings", e);
+  }
+}
+
 // ── Fav Button ──
 
 export function refreshFavButton() {
@@ -331,6 +344,7 @@ export function playFromSearchRow(rowIdx) {
   }));
   playFromQueueIndex(rowIdx);
   renderQueuePanel();
+  void saveQueueToSettings();
 }
 
 export function playFromPlaylistRow(rowIdx) {
@@ -339,6 +353,7 @@ export function playFromPlaylistRow(rowIdx) {
   appState.playQueue = queue;
   playFromQueueIndex(rowIdx);
   renderQueuePanel();
+  void saveQueueToSettings();
 }
 
 export function playFromRecentRow(rowIdx) {
@@ -359,6 +374,7 @@ export function playFromRecentRow(rowIdx) {
   }
   void playFromQueueIndex(0);
   renderQueuePanel();
+  void saveQueueToSettings();
 }
 
 // ── Core Play ──
