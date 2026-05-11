@@ -2092,7 +2092,10 @@ function wirePlayer() {
   });
 
   const togglePlay = async () => {
-    if (!a.src) return;
+    if (!a.src) {
+      if (playQueue.length) void playFromQueueIndex(playIndex);
+      return;
+    }
     try {
       if (a.paused) await a.play();
       else a.pause();
@@ -2334,6 +2337,11 @@ export function startMobileApp() {
           playIndex = Math.max(0, Math.min(idx, parsed.length - 1));
           renderQueueSheet();
           syncMobilePlayerNav();
+          // Update player chrome to show the current track
+          const cur = parsed[playIndex];
+          if (cur) {
+            setChrome({ title: cur.title, sub: cur.artist || "", coverUrl: cur.cover_url || null });
+          }
         }
       }
     } catch (e) {

@@ -131,6 +131,9 @@ pub struct Settings {
     /// 上次播放队列中的当前曲目索引
     #[serde(default)]
     pub last_play_index: i64,
+    /// 上次播放顺序模式（0=顺序,1=列表循环,2=单曲,3=随机）
+    #[serde(default)]
+    pub last_play_mode_index: i64,
 }
 
 fn default_volume() -> f64 {
@@ -217,6 +220,7 @@ impl Default for Settings {
             desktop_lyrics_font_family: String::new(),
             last_play_queue_json: String::new(),
             last_play_index: 0,
+            last_play_mode_index: 0,
         }
     }
 }

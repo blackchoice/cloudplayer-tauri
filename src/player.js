@@ -65,7 +65,11 @@ export async function saveQueueToSettings() {
   try {
     const json = JSON.stringify(appState.playQueue);
     await invoke("save_settings", {
-      patch: { last_play_queue_json: json, last_play_index: appState.playIndex },
+      patch: {
+        last_play_queue_json: json,
+        last_play_index: appState.playIndex,
+        last_play_mode_index: appState.playModeIndex,
+      },
     });
   } catch (e) {
     console.warn("saveQueueToSettings", e);

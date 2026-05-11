@@ -24,6 +24,7 @@ pub struct SettingsPatch {
     pub desktop_lyrics_font_family: Option<String>,
     pub last_play_queue_json: Option<String>,
     pub last_play_index: Option<i64>,
+    pub last_play_mode_index: Option<i64>,
 }
 
 #[tauri::command]
@@ -145,6 +146,9 @@ pub fn save_settings(patch: SettingsPatch) -> Result<(), String> {
     }
     if let Some(v) = patch.last_play_index {
         s.last_play_index = v.max(0);
+    }
+    if let Some(v) = patch.last_play_mode_index {
+        s.last_play_mode_index = v.clamp(0, 3);
     }
     s.save()
 }

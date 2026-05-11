@@ -4,6 +4,7 @@ import {
   NAV,
   MSG_REQUEST_FAILED,
   MAIN_NAV_PAGE_IDS,
+  PLAY_MODES,
 } from "./constants.js";
 import {
   escapeHtml,
@@ -34,6 +35,7 @@ import {
   playFromRecentRow,
   renderQueuePanel,
   updatePlayerChrome,
+  setPlayerNavEnabled,
   audioEl,
 } from "./player.js";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
@@ -1062,11 +1064,29 @@ export async function loadSettings() {
           const idx = Number(s.last_play_index) || 0;
           appState.playIndex = Math.max(0, Math.min(idx, parsed.length - 1));
           renderQueuePanel();
+          // Update player chrome to show the current track
+          const cur = parsed[appState.playIndex];
+          if (cur) {
+            updatePlayerChrome({ title: cur.title, sub: cur.artist || "", coverUrl: cur.cover_url || null });
+          }
+          // Enable play button so user can start playback
+          const playBtn = document.getElementById("btn-player-play");
+          if (playBtn) playBtn.disabled = false;
         }
       } catch (e) {
         console.warn("restore play queue", e);
       }
     }
+    // Restore persisted play mode
+    if (typeof s?.last_play_mode_index === "number" && s.last_play_mode_index >= 0 && s.last_play_mode_index < PLAY_MODES.length) {
+      appState.playModeIndex = Math.floor(s.last_play_mode_index);
+      const m = PLAY_MODES[appState.playModeIndex];
+      const modeBtn = document.getElementById("btn-play-mode");
+      if (modeBtn && m) { modeBtn.textContent = m.label; modeBtn.title = m.tip; }
+      const immBtn = document.getElementById("immersive-mode");
+      if (immBtn && m) { immBtn.textContent = m.label; immBtn.title = m.tip; }
+    }
+    setPlayerNavEnabled();
     const { refreshLyricsLockMenuLabel, scheduleDesktopLyricsStyleSync, openDesktopLyricsFromSettingsIfNeeded } = await import("./lyrics.js");
     refreshLyricsLockMenuLabel();
     if (appState.desktopLyricsOpen) {

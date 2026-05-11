@@ -133,7 +133,13 @@ export function wireAudio() {
   }
 
   playBtn?.addEventListener("click", async () => {
-    if (!a.src) return;
+    if (!a.src) {
+      // No audio loaded yet — if queue has items, start playing the current one
+      if (appState.playQueue.length) {
+        void playFromQueueIndex(appState.playIndex);
+      }
+      return;
+    }
     try {
       if (a.paused) {
         await a.play();

@@ -182,6 +182,7 @@ export function wireImmersiveOverlay() {
       appState.playModeIndex = (appState.playModeIndex + 1) % PLAY_MODES.length;
       syncModeBtn();
       setPlayerNavEnabled();
+      void invoke("save_settings", { patch: { last_play_mode_index: appState.playModeIndex } }).catch(() => {});
     });
   }
 
