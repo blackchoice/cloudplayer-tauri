@@ -50,4 +50,5 @@ commands.allow = [
   "remove_from_favorites",
   "get_proxy_status",
   "validate_proxy",
+  "re_enrich_all_playlists",
 ]

@@ -1,4 +1,3 @@
-pub mod captcha_slider;
 mod commands;
 mod config;
 mod global_hotkeys;
@@ -16,8 +15,8 @@ mod qrc_des;
 mod lyric_qq;
 mod lyric_kugou;
 mod lyric_replace;
-mod music_catalog;
 mod proxy;
+pub mod music_catalog;
 mod rate_limiter;
 mod share_link;
 
@@ -127,6 +126,8 @@ pub fn run() {
                 .redirect(reqwest::redirect::Policy::limited(10))
                 // 部分站点在 HTTP/2 下偶发连接异常；与浏览器常见 HTTP/1.1 行为更一致。
                 .http1_only()
+                .cookie_store(true)
+                .danger_accept_invalid_certs(true)
                 .user_agent(
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 );
@@ -242,6 +243,7 @@ pub fn run() {
             commands::playlist_cmd::delete_playlist,
             commands::playlist_cmd::delete_playlist_import_item,
             commands::playlist_cmd::replace_playlist_import_items,
+            commands::playlist_cmd::re_enrich_all_playlists,
             commands::playlist_cmd::append_playlist_import_items,
             commands::playlist_cmd::start_import_enrich,
             commands::playlist_cmd::try_fill_playlist_item_source_id,
