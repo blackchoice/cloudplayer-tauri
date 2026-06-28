@@ -26,7 +26,8 @@ URL 形态：`scheme://[user:pass@]host:port`。
    - `HTTPS_PROXY` / `https_proxy`、`HTTP_PROXY` / `http_proxy`、`ALL_PROXY` / `all_proxy` —— 标准变量。
    - `NO_PROXY` / `no_proxy` —— 不走代理的域名 / IP / CIDR 列表。
 3. **配置文件**：`settings.json` 的 `proxy.enabled + proxy.url + proxy.no_proxy`。
-4. 全部为空 → 不启用代理。
+4. **Windows 系统代理**：注册表 `Internet Settings`（Clash / V2Ray 开启「系统代理」时），自动补全为 `http://host:port`。
+5. 全部为空 → 不启用代理。
 
 ## settings.json 形态
 

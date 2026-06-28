@@ -250,7 +250,36 @@ fn env_no_proxy() -> Option<String> {
     None
 }
 
-/// 综合 CLI 覆盖 + 环境变量 + settings.json，输出最终代理及来源。
+/// Windows 注册表「Internet 设置」中的系统代理（Clash / V2Ray 开启「系统代理」时写入）。
+#[cfg(target_os = "windows")]
+fn windows_system_proxy_url() -> Option<String> {
+    use winreg::enums::HKEY_CURRENT_USER;
+    use winreg::RegKey;
+    let settings = RegKey::predef(HKEY_CURRENT_USER)
+        .open_subkey("Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings")
+        .ok()?;
+    let enabled: u32 = settings.get_value("ProxyEnable").ok()?;
+    if enabled == 0 {
+        return None;
+    }
+    let server: String = settings.get_value("ProxyServer").ok()?;
+    let server = server.trim();
+    if server.is_empty() {
+        return None;
+    }
+    Some(if server.contains("://") {
+        server.to_string()
+    } else {
+        format!("http://{server}")
+    })
+}
+
+#[cfg(not(target_os = "windows"))]
+fn windows_system_proxy_url() -> Option<String> {
+    None
+}
+
+/// 综合 CLI 覆盖 + 环境变量 + settings.json + Windows 系统代理，输出最终代理及来源。
 pub fn resolve_effective(cli: &CliProxyOverride, settings: &ProxyConfig) -> EffectiveProxy {
     if cli.disable {
         return EffectiveProxy {
@@ -295,6 +324,20 @@ pub fn resolve_effective(cli: &CliProxyOverride, settings: &ProxyConfig) -> Effe
                     no_proxy: normalize_no_proxy(&settings.no_proxy),
                 },
                 source: "settings".to_string(),
+            };
+        }
+    }
+    if let Some(url) = windows_system_proxy_url() {
+        if parse_proxy_url(&url).is_ok() {
+            return EffectiveProxy {
+                config: ProxyConfig {
+                    enabled: true,
+                    url,
+                    no_proxy: normalize_no_proxy(
+                        &env_no_proxy().unwrap_or_else(|| settings.no_proxy.clone()),
+                    ),
+                },
+                source: "system:windows".to_string(),
             };
         }
     }

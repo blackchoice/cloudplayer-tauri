@@ -216,6 +216,10 @@ impl GequhaiProvider {
     /// 对齐站点提示：去掉括号/特殊符号，截断 50 字。
     pub fn sanitize_search_keyword(s: &str) -> String {
         let mut t = s.replace('&', " ");
+        // gequhai API 拒绝 > < ? / 等符号（业务错误 code 3）
+        for ch in ['/', '\\', '?', '<', '>', '：'] {
+            t = t.replace(ch, " ");
+        }
         let re_paren =
             Regex::new(r"[\(\（\[【《][^)\）\]】》]*[\)\）\]】》]").unwrap_or_else(|_| Regex::new("$^").unwrap());
         for _ in 0..4 {
