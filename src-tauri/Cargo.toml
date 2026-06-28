@@ -1,6 +1,6 @@
 [package]
 name = "cloudplayer-tauri"
-version = "2.0.1"
+version = "2.0.2"
 description = "CloudPlayer desktop (Tauri / Rust)"
 edition = "2021"
 
@@ -47,7 +47,7 @@ async-trait = "0.1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots", "stream", "socks"] }
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
-reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls", "stream","socks", "cookies"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls", "stream", "socks", "cookies"] }
 tauri-plugin-global-shortcut = { version = "2", default-features = false }
 
 [target.'cfg(target_os = "windows")'.dependencies]
